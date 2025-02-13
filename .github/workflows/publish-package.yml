@@ -32,9 +32,6 @@ jobs:
       - name: Install dependencies
         run: poetry install
 
-      - name: Build project
-        run: poetry build
-
       - name: Action | Semantic Version Release
         id: release
         # Adjust tag with desired version if applicable.
@@ -43,6 +40,10 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           git_committer_name: "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
+
+      - name: Build project
+        run: poetry build
+        if: steps.release.outputs.released == 'true'
 
       - name: Publish | Upload package to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

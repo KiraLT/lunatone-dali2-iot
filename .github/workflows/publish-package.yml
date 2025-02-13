@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: poetry install
 
+      - name: Build project
+        run: poetry build
+
       - name: Action | Semantic Version Release
         id: release
         # Adjust tag with desired version if applicable.

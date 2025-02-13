@@ -42,5 +42,4 @@ version_variables = [
     "dali2iot/__init__.py:__version__",
     "pyproject.toml:version",
 ]
-build_command = "poetry build"
 commit_message = "Release {version} [skip ci]"

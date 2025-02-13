@@ -1,0 +1,46 @@
+[tool.poetry]
+name = "lunatone-dali2-iot"
+version = "1.0.0"
+description = "A client library for accessing Dali IoT"
+authors = ['KiraLT']
+readme = "README.md"
+license = "MIT"
+packages = [{ include = "dali2iot" }]
+homepage = "https://github.com/KiraLT/common-stuff/"
+documentation = "https://kiralt.github.io/lunatone-dali2-iot/"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+httpx = ">=0.20.0,<0.29.0"
+attrs = ">=22.2.0"
+python-dateutil = "^2.8.0"
+
+
+[tool.poetry.group.dev.dependencies]
+taskipy = "^1.14.1"
+pdoc = "^15.0.1"
+ruff = "^0.9.6"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "I", "UP"]
+
+[tool.taskipy.tasks]
+docs = "pdoc --output-dir docs dali2iot"
+format = "ruff format"
+check = "ruff check"
+
+[tool.semantic_release]
+version_variables = [
+    "dali2iot/__init__.py:__version__",
+    "pyproject.toml:version",
+]
+build_command = "poetry build"
+commit_message = "Release {version} [skip ci]"

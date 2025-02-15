@@ -64,7 +64,7 @@ def sync_detailed(
     client: Union[AuthenticatedClient, Client],
     body: NewCircadian,
 ) -> Response[Union[CircadianResponse, HTTPValidationError]]:
-    """New Circadian
+    """Create Circadian
 
     Args:
         body (NewCircadian):

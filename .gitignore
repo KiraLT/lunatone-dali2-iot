@@ -203,3 +203,4 @@ cython_debug/
 # Project specific
 /docs
 /example.py
+/example-ws.py

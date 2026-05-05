@@ -561,18 +561,28 @@ class AsyncClient:
     """Asynchronous client for the Lunatone Dali-2 IoT gateway.
 
     Mirrors :class:`Client` method-for-method, with every operation
-    declared ``async``. Use as ``async with AsyncClient(...) as c:`` to get
-    a connection pool that's torn down cleanly on exit.
+    declared ``async``. Use as ``async with AsyncClient(...) as c:`` to
+    get a connection pool that's torn down cleanly on exit, or call
+    methods directly on the instance.
 
-    Each method has the same semantics as its :class:`Client` counterpart;
-    the docstrings here keep things short and link through to the sync
-    version for the full description.
+    Example::
+
+        import asyncio
+        from dali2iot import AsyncClient, ControlData
+
+        async def main() -> None:
+            async with AsyncClient(base_url="http://192.168.1.41") as c:
+                for device in await c.list_devices():
+                    print(device.id, device.name)
+                await c.control_device(1, ControlData(dimmable=50))
+
+        asyncio.run(main())
 
     Args:
         base_url: Root URL of the gateway, e.g. ``"http://192.168.1.41"``.
-        timeout: Request timeout in seconds.
+        timeout: Request timeout in seconds. ``None`` = httpx default.
         headers: Extra request headers merged into every call.
-        verify_ssl: Pass ``False`` to skip TLS verification.
+        verify_ssl: Pass ``False`` to skip TLS verification (lab use only).
         token: Optional bearer token sent as ``Authorization: Bearer …``.
     """
 
@@ -607,15 +617,27 @@ class AsyncClient:
     # ----- devices -----
 
     async def list_devices(self) -> list[Device]:
-        """Async version of :meth:`Client.list_devices`."""
+        """Return every DALI :class:`Device` known to the gateway (``GET /devices``).
+
+        Async version of :meth:`Client.list_devices`.
+        """
         return _model_list(Device, await self._json("GET", "/devices"), "devices")
 
     async def delete_all_devices(self) -> None:
-        """Async version of :meth:`Client.delete_all_devices`."""
+        """Delete every device (``DELETE /devices``).
+
+        Removes the gateway's view of the bus; the physical gear keeps its
+        configuration.
+
+        Async version of :meth:`Client.delete_all_devices`.
+        """
         await self._json("DELETE", "/devices")
 
     async def get_device(self, device_id: int) -> Device:
-        """Async version of :meth:`Client.get_device`."""
+        """Fetch a single :class:`Device` by id (``GET /device/{id}``).
+
+        Async version of :meth:`Client.get_device`.
+        """
         return _model(Device, await self._json("GET", f"/device/{device_id}"))
 
     async def update_device(
@@ -625,313 +647,552 @@ class AsyncClient:
         name: str | None = None,
         groups: list[int] | None = None,
     ) -> Device:
-        """Async version of :meth:`Client.update_device`."""
+        """Update a device's name and/or DALI groups (``PUT /device/{id}``).
+
+        Args:
+            device_id: Identifier of the device to update.
+            name: New human-readable name; ``None`` = leave unchanged.
+            groups: New DALI group membership; ``None`` = leave unchanged.
+
+        Returns:
+            The updated :class:`Device`.
+
+        Async version of :meth:`Client.update_device`.
+        """
         data = await self._json("PUT", f"/device/{device_id}", _device_update_body(name, groups))
         return _model(Device, data)
 
     async def delete_device(self, device_id: int) -> None:
-        """Async version of :meth:`Client.delete_device`."""
+        """Forget a single device (``DELETE /device/{id}``).
+
+        Async version of :meth:`Client.delete_device`.
+        """
         await self._json("DELETE", f"/device/{device_id}")
 
     # ----- control -----
 
     async def control_device(self, device_id: int, data: ControlData) -> None:
-        """Async version of :meth:`Client.control_device`."""
+        """Apply a :class:`ControlData` payload to one device (``POST /device/{id}/control``).
+
+        Async version of :meth:`Client.control_device`.
+        """
         await self._json("POST", f"/device/{device_id}/control", data.to_dict())
 
     async def control_group(self, group_id: int, data: ControlData) -> None:
-        """Async version of :meth:`Client.control_group`."""
+        """Apply a :class:`ControlData` payload to a DALI group (``POST /group/{id}/control``).
+
+        Async version of :meth:`Client.control_group`.
+        """
         await self._json("POST", f"/group/{group_id}/control", data.to_dict())
 
     async def control_zone(self, zone_id: int, data: ControlData) -> None:
-        """Async version of :meth:`Client.control_zone`."""
+        """Apply a :class:`ControlData` payload to a :class:`Zone` (``POST /zone/{id}/control``).
+
+        Async version of :meth:`Client.control_zone`.
+        """
         await self._json("POST", f"/zone/{zone_id}/control", data.to_dict())
 
     async def control_broadcast(self, data: ControlData) -> None:
-        """Async version of :meth:`Client.control_broadcast`."""
+        """Broadcast a :class:`ControlData` payload to every device (``POST /broadcast/control``).
+
+        Async version of :meth:`Client.control_broadcast`.
+        """
         await self._json("POST", "/broadcast/control", data.to_dict())
 
     # ----- link -----
 
     async def enable_linking(self) -> None:
-        """Async version of :meth:`Client.enable_linking`."""
+        """Enable the gateway's linking (DALI commissioning) mode (``POST /link/enable``).
+
+        Async version of :meth:`Client.enable_linking`.
+        """
         await self._json("POST", "/link/enable")
 
     async def disable_linking(self) -> None:
-        """Async version of :meth:`Client.disable_linking`."""
+        """Disable the gateway's linking mode (``POST /link/disable``).
+
+        Async version of :meth:`Client.disable_linking`.
+        """
         await self._json("POST", "/link/disable")
 
     # ----- DALI bus scan -----
 
     async def get_scan(self) -> Scan:
-        """Async version of :meth:`Client.get_scan`."""
+        """Return the current bus-scan progress (``GET /dali/scan``).
+
+        Async version of :meth:`Client.get_scan`.
+        """
         return _model(Scan, await self._json("GET", "/dali/scan"))
 
     async def start_scan(self, options: StartScan | None = None) -> Scan:
-        """Async version of :meth:`Client.start_scan`."""
+        """Start a DALI bus scan (``POST /dali/scan``).
+
+        Args:
+            options: Scan parameters (re-address, lines to scan, etc.).
+                ``None`` triggers a default scan.
+
+        Returns:
+            The initial :class:`Scan` state. Poll :meth:`get_scan` for progress.
+
+        Async version of :meth:`Client.start_scan`.
+        """
         body = options.to_dict() if options else {}
         return _model(Scan, await self._json("POST", "/dali/scan", body))
 
     async def cancel_scan(self) -> Scan:
-        """Async version of :meth:`Client.cancel_scan`."""
+        """Cancel the running bus scan (``POST /dali/scan/cancel``).
+
+        Async version of :meth:`Client.cancel_scan`.
+        """
         return _model(Scan, await self._json("POST", "/dali/scan/cancel"))
 
     # ----- info / system -----
 
     async def get_info(self) -> Info:
-        """Async version of :meth:`Client.get_info`."""
+        """Return gateway-wide :class:`Info` (firmware, hardware, bus health) (``GET /info``).
+
+        Async version of :meth:`Client.get_info`.
+        """
         return _model(Info, await self._json("GET", "/info"))
 
     async def update_info(self, info: InfoUpdate) -> Info:
-        """Async version of :meth:`Client.update_info`."""
+        """Update editable :class:`Info` fields, currently just the device name (``PUT /info``).
+
+        Async version of :meth:`Client.update_info`.
+        """
         return _model(Info, await self._json("PUT", "/info", info.to_dict()))
 
     async def reset(self) -> None:
-        """Async version of :meth:`Client.reset`."""
+        """Factory-reset the gateway (``DELETE /reset``).
+
+        Wipes configuration. Use with care — there's no confirmation step.
+
+        Async version of :meth:`Client.reset`.
+        """
         await self._json("DELETE", "/reset")
 
     async def reboot(self) -> None:
-        """Async version of :meth:`Client.reboot`."""
+        """Reboot the gateway (``POST /reboot``). Configuration is preserved.
+
+        Async version of :meth:`Client.reboot`.
+        """
         await self._json("POST", "/reboot")
 
     # ----- date/time + location -----
 
     async def get_datetime(self) -> DateTime:
-        """Async version of :meth:`Client.get_datetime`."""
+        """Return the gateway's current wall-clock state (``GET /datetime``).
+
+        Async version of :meth:`Client.get_datetime`.
+        """
         return _model(DateTime, await self._json("GET", "/datetime"))
 
     async def set_datetime(self, datetime: DateTime) -> DateTime:
-        """Async version of :meth:`Client.set_datetime`."""
+        """Set the gateway's date/time and time-zone (``POST /datetime``).
+
+        Async version of :meth:`Client.set_datetime`.
+        """
         return _model(DateTime, await self._json("POST", "/datetime", datetime.to_dict()))
 
     async def get_timezones(self) -> TimeZones:
-        """Async version of :meth:`Client.get_timezones`."""
+        """Return every time-zone identifier the gateway accepts (``GET /datetime/timezones``).
+
+        Async version of :meth:`Client.get_timezones`.
+        """
         return _model(TimeZones, await self._json("GET", "/datetime/timezones"))
 
     async def get_location(self) -> Location:
-        """Async version of :meth:`Client.get_location`."""
+        """Return the gateway's configured :class:`Location` (``GET /location``).
+
+        Async version of :meth:`Client.get_location`.
+        """
         return _model(Location, await self._json("GET", "/location"))
 
     async def set_location(self, location: Location) -> Location:
-        """Async version of :meth:`Client.set_location`."""
+        """Set the gateway's location, used for sunrise/sunset schedulers (``POST /location``).
+
+        Async version of :meth:`Client.set_location`.
+        """
         return _model(Location, await self._json("POST", "/location", location.to_dict()))
 
     async def detect_location(self) -> Location:
-        """Async version of :meth:`Client.detect_location`."""
+        """Auto-detect the gateway's location via its public IP (``POST /location/detect``).
+
+        Async version of :meth:`Client.detect_location`.
+        """
         return _model(Location, await self._json("POST", "/location/detect"))
 
     # ----- settings + ethernet -----
 
     async def get_settings(self) -> Settings:
-        """Async version of :meth:`Client.get_settings`."""
+        """Return protocol-level :class:`Settings` (``GET /settings``).
+
+        Async version of :meth:`Client.get_settings`.
+        """
         return _model(Settings, await self._json("GET", "/settings"))
 
     async def update_settings(self, settings: Settings) -> Settings:
-        """Async version of :meth:`Client.update_settings`."""
+        """Update protocol-level :class:`Settings` (``PUT /settings``).
+
+        Async version of :meth:`Client.update_settings`.
+        """
         return _model(Settings, await self._json("PUT", "/settings", settings.to_dict()))
 
     async def get_ethernet(self) -> Ethernet:
-        """Async version of :meth:`Client.get_ethernet`."""
+        """Return live :class:`Ethernet` status (MAC, settings, lease) (``GET /ethernet``).
+
+        Async version of :meth:`Client.get_ethernet`.
+        """
         return _model(Ethernet, await self._json("GET", "/ethernet"))
 
     async def update_ethernet(self, settings: EthernetSettings) -> Ethernet:
-        """Async version of :meth:`Client.update_ethernet`."""
+        """Apply new :class:`EthernetSettings` (``POST /ethernet``).
+
+        Note: changing the IP address may sever the connection — the
+        request itself succeeds, but follow-up calls will need the new URL.
+
+        Async version of :meth:`Client.update_ethernet`.
+        """
         return _model(Ethernet, await self._json("POST", "/ethernet", settings.to_dict()))
 
     # ----- zones -----
 
     async def list_zones(self) -> list[Zone]:
-        """Async version of :meth:`Client.list_zones`."""
+        """Return every configured :class:`Zone` (``GET /zones``).
+
+        Async version of :meth:`Client.list_zones`.
+        """
         return _model_list(Zone, await self._json("GET", "/zones"), "zones")
 
     async def delete_all_zones(self) -> None:
-        """Async version of :meth:`Client.delete_all_zones`."""
+        """Delete every zone (``DELETE /zones``). Devices themselves are untouched.
+
+        Async version of :meth:`Client.delete_all_zones`.
+        """
         await self._json("DELETE", "/zones")
 
     async def get_zone(self, zone_id: int) -> Zone:
-        """Async version of :meth:`Client.get_zone`."""
+        """Fetch a single :class:`Zone` by id (``GET /zone/{id}``).
+
+        Async version of :meth:`Client.get_zone`.
+        """
         return _model(Zone, await self._json("GET", f"/zone/{zone_id}"))
 
     async def create_zone(self, zone: Zone) -> Zone:
-        """Async version of :meth:`Client.create_zone`."""
+        """Create a new :class:`Zone` (``POST /zone``).
+
+        Leave :attr:`Zone.id` unset; the gateway assigns it.
+
+        Async version of :meth:`Client.create_zone`.
+        """
         return _model(Zone, await self._json("POST", "/zone", zone.to_dict()))
 
     async def update_zone(self, zone_id: int, zone: Zone) -> Zone:
-        """Async version of :meth:`Client.update_zone`."""
+        """Update an existing :class:`Zone` (``PUT /zone/{id}``).
+
+        Async version of :meth:`Client.update_zone`.
+        """
         return _model(Zone, await self._json("PUT", f"/zone/{zone_id}", zone.to_dict()))
 
     async def delete_zone(self, zone_id: int) -> None:
-        """Async version of :meth:`Client.delete_zone`."""
+        """Delete a single zone (``DELETE /zone/{id}``).
+
+        Async version of :meth:`Client.delete_zone`.
+        """
         await self._json("DELETE", f"/zone/{zone_id}")
 
     # ----- email -----
 
     async def get_email_settings(self) -> MailSettings:
-        """Async version of :meth:`Client.get_email_settings`."""
+        """Return the configured :class:`MailSettings` (``GET /email``).
+
+        The returned :attr:`MailSettings.mail_config.password` is a
+        boolean presence flag, not the secret.
+
+        Async version of :meth:`Client.get_email_settings`.
+        """
         return _model(MailSettings, await self._json("GET", "/email"))
 
     async def update_email_settings(self, settings: MailSettingsInput) -> MailSettings:
-        """Async version of :meth:`Client.update_email_settings`."""
+        """Update :class:`MailSettings` (``PUT /email``).
+
+        Pass plaintext SMTP credentials via :class:`MailSettingsInput`;
+        the response (typed as :class:`MailSettings`) replaces the password
+        with a presence flag.
+
+        Async version of :meth:`Client.update_email_settings`.
+        """
         return _model(MailSettings, await self._json("PUT", "/email", settings.to_dict()))
 
     async def test_email_settings(self) -> None:
-        """Async version of :meth:`Client.test_email_settings`."""
+        """Send a test email using the current configuration (``POST /email``).
+
+        Async version of :meth:`Client.test_email_settings`.
+        """
         await self._json("POST", "/email")
 
     # ----- sensors -----
 
     async def list_sensors(self) -> dict[str, object] | None:
-        """Async version of :meth:`Client.list_sensors`."""
+        """Return all sensors known to the gateway (``GET /sensors``).
+
+        The OpenAPI spec doesn't define a schema for the response body, so
+        the raw JSON dict is returned unchanged.
+
+        Async version of :meth:`Client.list_sensors`.
+        """
         return await self._json("GET", "/sensors")
 
     async def refresh_sensors(self) -> None:
-        """Async version of :meth:`Client.refresh_sensors`."""
+        """Trigger a re-poll of every sensor (``POST /sensors``).
+
+        Async version of :meth:`Client.refresh_sensors`.
+        """
         await self._json("POST", "/sensors")
 
     async def get_sensor(self, sensor_id: int) -> dict[str, object] | None:
-        """Async version of :meth:`Client.get_sensor`."""
+        """Return the latest reading for one sensor (``GET /sensors/{id}``).
+
+        The OpenAPI spec doesn't define a schema for the response body, so
+        the raw JSON dict is returned unchanged.
+
+        Async version of :meth:`Client.get_sensor`.
+        """
         return await self._json("GET", f"/sensors/{sensor_id}")
 
     async def refresh_sensor(self, sensor_id: int) -> None:
-        """Async version of :meth:`Client.refresh_sensor`."""
+        """Trigger a re-poll of one sensor (``POST /sensors/{id}``).
+
+        Async version of :meth:`Client.refresh_sensor`.
+        """
         await self._json("POST", f"/sensors/{sensor_id}")
 
     # ----- sequencer -----
 
     async def get_test_sequence(self) -> Sequence:
-        """Async version of :meth:`Client.get_test_sequence`."""
+        """Return the gateway's "test" sequence — a sandbox slot (``GET /automations/sequence/test``).
+
+        Async version of :meth:`Client.get_test_sequence`.
+        """
         return _model(Sequence, await self._json("GET", "/automations/sequence/test"))
 
     async def update_test_sequence(self, sequence: Sequence) -> Sequence:
-        """Async version of :meth:`Client.update_test_sequence`."""
+        """Replace the test sequence (``PUT /automations/sequence/test``).
+
+        Async version of :meth:`Client.update_test_sequence`.
+        """
         return _model(Sequence, await self._json("PUT", "/automations/sequence/test", sequence.to_dict()))
 
     async def create_sequence(self, sequence: Sequence) -> Sequence:
-        """Async version of :meth:`Client.create_sequence`."""
+        """Create a new :class:`Sequence` (``POST /automations/sequence``).
+
+        Async version of :meth:`Client.create_sequence`.
+        """
         return _model(Sequence, await self._json("POST", "/automations/sequence", sequence.to_dict()))
 
     async def list_sequences(self) -> list[Sequence]:
-        """Async version of :meth:`Client.list_sequences`."""
+        """Return every saved :class:`Sequence` (``GET /automations/sequences``).
+
+        Async version of :meth:`Client.list_sequences`.
+        """
         return _model_list(Sequence, await self._json("GET", "/automations/sequences"), "sequences")
 
     async def get_sequence(self, sequence_id: int) -> Sequence:
-        """Async version of :meth:`Client.get_sequence`."""
+        """Fetch one :class:`Sequence` by id (``GET /automations/sequence/{id}``).
+
+        Async version of :meth:`Client.get_sequence`.
+        """
         return _model(Sequence, await self._json("GET", f"/automations/sequence/{sequence_id}"))
 
     async def update_sequence(self, sequence_id: int, sequence: Sequence) -> Sequence:
-        """Async version of :meth:`Client.update_sequence`."""
+        """Update a saved :class:`Sequence` (``PUT /automations/sequence/{id}``).
+
+        Async version of :meth:`Client.update_sequence`.
+        """
         return _model(Sequence, await self._json("PUT", f"/automations/sequence/{sequence_id}", sequence.to_dict()))
 
     async def delete_sequence(self, sequence_id: int) -> None:
-        """Async version of :meth:`Client.delete_sequence`."""
+        """Delete one sequence (``DELETE /automations/sequence/{id}``).
+
+        Async version of :meth:`Client.delete_sequence`.
+        """
         await self._json("DELETE", f"/automations/sequence/{sequence_id}")
 
     async def start_sequence(self, sequence_id: int) -> None:
-        """Async version of :meth:`Client.start_sequence`."""
+        """Begin executing a sequence (``POST /automations/sequence/{id}/start``).
+
+        Async version of :meth:`Client.start_sequence`.
+        """
         await self._json("POST", f"/automations/sequence/{sequence_id}/start")
 
     async def stop_sequence(self, sequence_id: int) -> None:
-        """Async version of :meth:`Client.stop_sequence`."""
+        """Stop a running sequence (``POST /automations/sequence/{id}/stop``).
+
+        Async version of :meth:`Client.stop_sequence`.
+        """
         await self._json("POST", f"/automations/sequence/{sequence_id}/stop")
 
     # ----- circadian -----
 
     async def list_circadians(self) -> list[Circadian]:
-        """Async version of :meth:`Client.list_circadians`."""
+        """Return every :class:`Circadian` rhythm (``GET /automations/circadians``).
+
+        Async version of :meth:`Client.list_circadians`.
+        """
         return _model_list(Circadian, await self._json("GET", "/automations/circadians"), "circadians")
 
     async def create_circadian(self, circadian: Circadian) -> Circadian:
-        """Async version of :meth:`Client.create_circadian`."""
+        """Create a new :class:`Circadian` rhythm (``POST /automations/circadian``).
+
+        Async version of :meth:`Client.create_circadian`.
+        """
         return _model(Circadian, await self._json("POST", "/automations/circadian", circadian.to_dict()))
 
     async def get_circadian(self, circadian_id: int) -> Circadian:
-        """Async version of :meth:`Client.get_circadian`."""
+        """Fetch one :class:`Circadian` by id (``GET /automations/circadian/{id}``).
+
+        Async version of :meth:`Client.get_circadian`.
+        """
         return _model(Circadian, await self._json("GET", f"/automations/circadian/{circadian_id}"))
 
     async def update_circadian(self, circadian_id: int, circadian: Circadian) -> Circadian:
-        """Async version of :meth:`Client.update_circadian`."""
+        """Update a saved :class:`Circadian` rhythm (``PUT /automations/circadian/{id}``).
+
+        Async version of :meth:`Client.update_circadian`.
+        """
         return _model(
             Circadian,
             await self._json("PUT", f"/automations/circadian/{circadian_id}", circadian.to_dict()),
         )
 
     async def delete_circadian(self, circadian_id: int) -> None:
-        """Async version of :meth:`Client.delete_circadian`."""
+        """Delete one circadian rhythm (``DELETE /automations/circadian/{id}``).
+
+        Async version of :meth:`Client.delete_circadian`.
+        """
         await self._json("DELETE", f"/automations/circadian/{circadian_id}")
 
     async def start_circadian(self, circadian_id: int) -> None:
-        """Async version of :meth:`Client.start_circadian`."""
+        """Activate a circadian rhythm (``POST /automations/circadian/{id}/start``).
+
+        Async version of :meth:`Client.start_circadian`.
+        """
         await self._json("POST", f"/automations/circadian/{circadian_id}/start")
 
     async def stop_circadian(self, circadian_id: int) -> None:
-        """Async version of :meth:`Client.stop_circadian`."""
+        """Deactivate a circadian rhythm (``POST /automations/circadian/{id}/stop``).
+
+        Async version of :meth:`Client.stop_circadian`.
+        """
         await self._json("POST", f"/automations/circadian/{circadian_id}/stop")
 
     # ----- scheduler -----
 
     async def list_schedules(self) -> list[Scheduler]:
-        """Async version of :meth:`Client.list_schedules`."""
+        """Return every :class:`Scheduler` (``GET /automations/schedules``).
+
+        Async version of :meth:`Client.list_schedules`.
+        """
         return _model_list(Scheduler, await self._json("GET", "/automations/schedules"), "schedulers")
 
     async def create_scheduler(self, scheduler: Scheduler) -> Scheduler:
-        """Async version of :meth:`Client.create_scheduler`."""
+        """Create a new :class:`Scheduler` (``POST /automations/scheduler``).
+
+        Async version of :meth:`Client.create_scheduler`.
+        """
         return _model(Scheduler, await self._json("POST", "/automations/scheduler", scheduler.to_dict()))
 
     async def get_scheduler(self, scheduler_id: int) -> Scheduler:
-        """Async version of :meth:`Client.get_scheduler`."""
+        """Fetch one :class:`Scheduler` by id (``GET /automations/scheduler/{id}``).
+
+        Async version of :meth:`Client.get_scheduler`.
+        """
         return _model(Scheduler, await self._json("GET", f"/automations/scheduler/{scheduler_id}"))
 
     async def update_scheduler(self, scheduler_id: int, scheduler: Scheduler) -> Scheduler:
-        """Async version of :meth:`Client.update_scheduler`."""
+        """Update a saved :class:`Scheduler` (``PUT /automations/scheduler/{id}``).
+
+        Async version of :meth:`Client.update_scheduler`.
+        """
         return _model(
             Scheduler,
             await self._json("PUT", f"/automations/scheduler/{scheduler_id}", scheduler.to_dict()),
         )
 
     async def delete_scheduler(self, scheduler_id: int) -> None:
-        """Async version of :meth:`Client.delete_scheduler`."""
+        """Delete one scheduler (``DELETE /automations/scheduler/{id}``).
+
+        Async version of :meth:`Client.delete_scheduler`.
+        """
         await self._json("DELETE", f"/automations/scheduler/{scheduler_id}")
 
     async def start_scheduler(self, scheduler_id: int) -> None:
-        """Async version of :meth:`Client.start_scheduler`."""
+        """Activate a scheduler (``POST /automations/scheduler/{id}/start``).
+
+        Async version of :meth:`Client.start_scheduler`.
+        """
         await self._json("POST", f"/automations/scheduler/{scheduler_id}/start")
 
     async def stop_scheduler(self, scheduler_id: int) -> None:
-        """Async version of :meth:`Client.stop_scheduler`."""
+        """Deactivate a scheduler (``POST /automations/scheduler/{id}/stop``).
+
+        Async version of :meth:`Client.stop_scheduler`.
+        """
         await self._json("POST", f"/automations/scheduler/{scheduler_id}/stop")
 
     # ----- trigger actions -----
 
     async def list_trigger_actions(self) -> list[TriggerAction]:
-        """Async version of :meth:`Client.list_trigger_actions`."""
+        """Return every :class:`TriggerAction` (``GET /automations/triggerActions``).
+
+        Async version of :meth:`Client.list_trigger_actions`.
+        """
         return _model_list(TriggerAction, await self._json("GET", "/automations/triggerActions"), "triggerActions")
 
     async def create_trigger_action(self, trigger_action: TriggerAction) -> TriggerAction:
-        """Async version of :meth:`Client.create_trigger_action`."""
+        """Create a new :class:`TriggerAction` (``POST /automations/triggerAction``).
+
+        Async version of :meth:`Client.create_trigger_action`.
+        """
         return _model(
             TriggerAction,
             await self._json("POST", "/automations/triggerAction", trigger_action.to_dict()),
         )
 
     async def get_trigger_action(self, trigger_action_id: int) -> TriggerAction:
-        """Async version of :meth:`Client.get_trigger_action`."""
+        """Fetch one :class:`TriggerAction` by id (``GET /automations/triggerAction/{id}``).
+
+        Async version of :meth:`Client.get_trigger_action`.
+        """
         return _model(TriggerAction, await self._json("GET", f"/automations/triggerAction/{trigger_action_id}"))
 
     async def update_trigger_action(self, trigger_action_id: int, trigger_action: TriggerAction) -> TriggerAction:
-        """Async version of :meth:`Client.update_trigger_action`."""
+        """Update a saved :class:`TriggerAction` (``PUT /automations/triggerAction/{id}``).
+
+        Async version of :meth:`Client.update_trigger_action`.
+        """
         return _model(
             TriggerAction,
             await self._json("PUT", f"/automations/triggerAction/{trigger_action_id}", trigger_action.to_dict()),
         )
 
     async def delete_trigger_action(self, trigger_action_id: int) -> None:
-        """Async version of :meth:`Client.delete_trigger_action`."""
+        """Delete one trigger action (``DELETE /automations/triggerAction/{id}``).
+
+        Async version of :meth:`Client.delete_trigger_action`.
+        """
         await self._json("DELETE", f"/automations/triggerAction/{trigger_action_id}")
 
     async def start_trigger_action(self, trigger_action_id: int) -> None:
-        """Async version of :meth:`Client.start_trigger_action`."""
+        """Activate a trigger action (``POST /automations/triggerAction/{id}/start``).
+
+        Async version of :meth:`Client.start_trigger_action`.
+        """
         await self._json("POST", f"/automations/triggerAction/{trigger_action_id}/start")
 
     async def stop_trigger_action(self, trigger_action_id: int) -> None:
-        """Async version of :meth:`Client.stop_trigger_action`."""
+        """Deactivate a trigger action (``POST /automations/triggerAction/{id}/stop``).
+
+        Async version of :meth:`Client.stop_trigger_action`.
+        """
         await self._json("POST", f"/automations/triggerAction/{trigger_action_id}/stop")

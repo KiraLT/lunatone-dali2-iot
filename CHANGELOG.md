@@ -1,7 +1,15 @@
 # CHANGELOG
 
 
+## v2.1.0 (2026-05-05)
+
+
 ## v2.0.0 (2026-05-05)
+
+### Features
+
+- Websocket support
+  ([`8a90a57`](https://github.com/KiraLT/lunatone-dali2-iot/commit/8a90a57ab981741f2f7f7ac7f1e2603b1d1c3a43))
 
 
 ## v1.1.0 (2025-02-15)

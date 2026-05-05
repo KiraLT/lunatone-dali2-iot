@@ -1,6 +1,9 @@
 # CHANGELOG
 
 
+## v2.0.0 (2026-05-05)
+
+
 ## v1.1.0 (2025-02-15)
 
 ### Chores
@@ -10,8 +13,17 @@
 
 ### Features
 
+- Rewrite and simplify API
+  ([`8a93d16`](https://github.com/KiraLT/lunatone-dali2-iot/commit/8a93d16a8db31c44e5d899a5471d1c0e286b45cf))
+
+BREAKING CHANGE: API restructure
+
 - Simplify generate api modules
   ([`d2da0ba`](https://github.com/KiraLT/lunatone-dali2-iot/commit/d2da0ba6759eac2eedb486f8ed789e2c84a23667))
+
+### Breaking Changes
+
+- Api restructure
 
 
 ## v0.1.0 (2025-02-13)

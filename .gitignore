@@ -202,3 +202,4 @@ cython_debug/
 
 # Project specific
 /docs
+/example.py

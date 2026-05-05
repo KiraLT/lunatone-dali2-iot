@@ -85,8 +85,7 @@ from .models import (
     Zone,
 )
 
-__version__ = "1.0.0"
-"""Package version string."""
+__version__ = "1.1.0"
 
 __all__ = (
     "RGB",

@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.1.0 (2025-02-15)
+
+### Chores
+
+- Update git to correct version
+  ([`81b97dc`](https://github.com/KiraLT/lunatone-dali2-iot/commit/81b97dc1c3429f9e83ccbb0021b577e062d6c46b))
+
+### Features
+
+- Simplify generate api modules
+  ([`d2da0ba`](https://github.com/KiraLT/lunatone-dali2-iot/commit/d2da0ba6759eac2eedb486f8ed789e2c84a23667))
+
+
 ## v0.1.0 (2025-02-13)
 
 ### Chores

@@ -647,85 +647,89 @@ class Kelvin(Model):
     """Brightness in percent. ``None`` = colour-only."""
 
 
-# ---------- one-off fades (the ``*WithFade`` control fields) ----------
+# ---------- fades (the ``*WithFade`` control fields) ----------
 #
-# The spec presents these as a fade for that one command. Whether the
-# gateway leaves the device's stored fade time unchanged afterwards isn't
-# documented.
+# The spec presents these as a fade for that one command, but they aren't
+# one-off. On firmware v1.18.7, ``dimmableWithFade`` went out on the bus as
+# DTR0 = fade time code, SET FADE TIME (twice), then the level command, and
+# the old fade time was never restored: the device kept the new one for
+# every later fade. The other ``*WithFade`` fields most likely work the
+# same way. So each ``fade_time`` here also stores a new fade time in the
+# device, exactly like :attr:`ControlData.fade_time`.
 
 
 @dataclass
 class DimmableWithFade(Model):
-    """Brightness with a one-off fade (``dimmableWithFade``)."""
+    """Brightness with a fade time (``dimmableWithFade``). Also stores the fade time in the device."""
 
     dim_value: float = 0.0
     """Brightness in percent (``0.0``–``100.0``)."""
 
     fade_time: float | None = None
-    """Fade time for this command, in seconds."""
+    """Fade time in seconds. The gateway also stores it in the device for later fades."""
 
 
 @dataclass
 class WithFadeTime(Model):
-    """Just a one-off fade time (``gotoLastActiveWithFade``)."""
+    """Just a fade time (``gotoLastActiveWithFade``). Also stores it in the device."""
 
     fade_time: float | None = None
-    """Fade time for this command, in seconds."""
+    """Fade time in seconds. The gateway also stores it in the device for later fades."""
 
 
 @dataclass
 class SceneWithFade(Model):
-    """Scene recall with a one-off fade (``sceneWithFade``)."""
+    """Scene recall with a fade time (``sceneWithFade``). Also stores the fade time in the device."""
 
     scene: int = 0
     """Scene number (``0``–``15``)."""
 
     fade_time: float | None = None
-    """Fade time for this command, in seconds."""
+    """Fade time in seconds. The gateway also stores it in the device for later fades."""
 
 
 @dataclass
 class RGBWithFade(Model):
-    """RGB colour with a one-off fade (``colorRGBWithFade``)."""
+    """RGB colour with a fade time (``colorRGBWithFade``). Also stores the fade time in the device."""
 
     color: RGB = field(default_factory=RGB)
     """The colour. Leave :attr:`RGB.dimmable` unset."""
 
     fade_time: float | None = None
-    """Fade time for this command, in seconds."""
+    """Fade time in seconds. The gateway also stores it in the device for later fades."""
 
 
 @dataclass
 class WAFWithFade(Model):
-    """WAF colour with a one-off fade (``colorWAFWithFade``)."""
+    """WAF colour with a fade time (``colorWAFWithFade``). Also stores the fade time in the device."""
 
     color: WAF = field(default_factory=WAF)
     """The colour. Leave :attr:`WAF.dimmable` unset."""
 
     fade_time: float | None = None
-    """Fade time for this command, in seconds."""
+    """Fade time in seconds. The gateway also stores it in the device for later fades."""
 
 
 @dataclass
 class KelvinWithFade(Model):
-    """Colour temperature with a one-off fade (``colorKelvinWithFade``)."""
+    """Colour temperature with a fade time (``colorKelvinWithFade``). Also stores the fade time in the device."""
 
     color: float = 4000.0
     """Colour temperature in kelvin."""
 
     fade_time: float | None = None
-    """Fade time for this command, in seconds."""
+    """Fade time in seconds. The gateway also stores it in the device for later fades."""
 
 
 @dataclass
 class XYWithFade(Model):
-    """CIE chromaticity with a one-off fade (``colorXYWithFade``)."""
+    """CIE chromaticity with a fade time (``colorXYWithFade``). Also stores the fade time in the device."""
 
     color: XY = field(default_factory=XY)
     """The coordinates. Leave :attr:`XY.dimmable` unset."""
 
     fade_time: float | None = None
-    """Fade time for this command, in seconds."""
+    """Fade time in seconds. The gateway also stores it in the device for later fades."""
 
 
 @dataclass
@@ -755,8 +759,8 @@ class ControlData(Model):
 
     This is a device setting, not a fade for this request: the gateway
     writes it into the DALI gear, and the gear uses it for every later
-    fading command. For a one-off fade use :attr:`dimmable_with_fade` and
-    the other ``*_with_fade`` fields.
+    fading command. The ``*_with_fade`` fields store it the same way, so the
+    gateway API has no true one-off fade.
     """
 
     fade_rate: float | None = None
@@ -796,25 +800,25 @@ class ControlData(Model):
     """Send DALI DOWN this many times (``1``–``5``)."""
 
     dimmable_with_fade: DimmableWithFade | None = None
-    """Set brightness with a one-off fade time."""
+    """Set brightness with a fade time (stored in the device, see :attr:`fade_time`)."""
 
     goto_last_active_with_fade: WithFadeTime | None = None
-    """Recall the last active level with a one-off fade time."""
+    """Recall the last active level with a fade time (stored in the device)."""
 
     scene_with_fade: SceneWithFade | None = None
-    """Recall a scene with a one-off fade time."""
+    """Recall a scene with a fade time (stored in the device)."""
 
     color_rgb_with_fade: RGBWithFade | None = field(default=None, metadata={"json": "colorRGBWithFade"})
-    """Set RGB colour with a one-off fade time."""
+    """Set RGB colour with a fade time (stored in the device)."""
 
     color_waf_with_fade: WAFWithFade | None = field(default=None, metadata={"json": "colorWAFWithFade"})
-    """Set WAF colour with a one-off fade time."""
+    """Set WAF colour with a fade time (stored in the device)."""
 
     color_kelvin_with_fade: KelvinWithFade | None = None
-    """Set colour temperature with a one-off fade time."""
+    """Set colour temperature with a fade time (stored in the device)."""
 
     color_xy_with_fade: XYWithFade | None = field(default=None, metadata={"json": "colorXYWithFade"})
-    """Set CIE chromaticity with a one-off fade time."""
+    """Set CIE chromaticity with a fade time (stored in the device)."""
 
 
 # ---------- zones ----------

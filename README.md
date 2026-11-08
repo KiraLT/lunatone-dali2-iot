@@ -22,7 +22,7 @@ pip install lunatone-dali2-iot
 ### Synchronous
 
 ```python
-from dali2iot import Client, ControlData, DimmableWithFade, Kelvin, RGB
+from dali2iot import Client, ControlData, Kelvin, RGB
 
 with Client(base_url="http://192.168.1.41") as client:
     for device in client.list_devices():
@@ -35,12 +35,9 @@ with Client(base_url="http://192.168.1.41") as client:
 
     # Or warm white at 30 %
     client.control_device(1, ControlData(dimmable_kelvin=Kelvin(kelvin=2700, dimmable=30)))
-
-    # Dim to 50 % over 4 s, for this command only
-    client.control_device(1, ControlData(dimmable_with_fade=DimmableWithFade(dim_value=50, fade_time=4)))
 ```
 
-> `ControlData.fade_time` doesn't fade one command: it stores a new fade time in the DALI device, which then applies to every later fade. Use the `*_with_fade` fields for one-off fades.
+> Fades aren't per command. `ControlData.fade_time` and every `*_with_fade` field make the gateway store a new fade time in the DALI device, which then applies to all its later fades (seen on firmware v1.18.7: the gateway sends SET FADE TIME and never restores the old value).
 
 ### Asynchronous
 

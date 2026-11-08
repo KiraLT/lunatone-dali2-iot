@@ -6,10 +6,10 @@ Typed Python client for the [Lunatone DALI-2 IoT](https://www.lunatone.com/en/pr
 
 ## Features
 
-- Sync (`Client`) and async (`AsyncClient`) HTTP clients — one method per OpenAPI operation, all 71 of them.
+- Sync (`Client`) and async (`AsyncClient`) HTTP clients — one method per OpenAPI operation, all 87 of them.
 - Async streaming `WebSocketClient` with one typed dataclass per wire event (devices, zones, sequences, schedulers, circadians, trigger actions, DALI bus traffic, datetime, ping, message flash).
-- Typed dataclasses for every request body and response (`Device`, `Zone`, `Scheduler`, `ControlData`, `Info`, `EthernetSettings`, …) — no `Any`, no dict guessing.
-- Single source of truth: the REST shapes mirror [`openapi.json`](openapi.json); the WebSocket shapes mirror the streaming JSON protocol the gateway emits on its root `ws://` endpoint.
+- Typed dataclasses for every request body and response (`Device`, `Zone`, `Scheduler`, `ControlData`, `Info`, `Sensor`, `EthernetSettings`, …) — no `Any`, no dict guessing.
+- Single source of truth: the REST shapes mirror [`openapi.json`](openapi.json) from gateway firmware v1.18.7/1.4.6; the WebSocket shapes mirror the streaming JSON protocol the gateway emits on its root `ws://` endpoint.
 
 ## Installation
 
@@ -22,7 +22,7 @@ pip install lunatone-dali2-iot
 ### Synchronous
 
 ```python
-from dali2iot import Client, ControlData, Kelvin, RGB
+from dali2iot import Client, ControlData, DimmableWithFade, Kelvin, RGB
 
 with Client(base_url="http://192.168.1.41") as client:
     for device in client.list_devices():
@@ -35,7 +35,12 @@ with Client(base_url="http://192.168.1.41") as client:
 
     # Or warm white at 30 %
     client.control_device(1, ControlData(dimmable_kelvin=Kelvin(kelvin=2700, dimmable=30)))
+
+    # Dim to 50 % over 4 s, for this command only
+    client.control_device(1, ControlData(dimmable_with_fade=DimmableWithFade(dim_value=50, fade_time=4)))
 ```
+
+> `ControlData.fade_time` doesn't fade one command: it stores a new fade time in the DALI device, which then applies to every later fade. Use the `*_with_fade` fields for one-off fades.
 
 ### Asynchronous
 
@@ -59,20 +64,27 @@ Every operation in [`openapi.json`](openapi.json) has a method on both clients, 
 
 | Tag | Methods |
 | --- | --- |
-| `devices` | `list_devices`, `get_device`, `update_device`, `delete_device`, `delete_all_devices` |
+| `devices` | `list_devices`, `get_device`, `update_device`, `delete_device`, `delete_all_devices`, `get_device_scenes`, `refresh_device_scenes`, `get_energy_report`, `get_diagnostics_maintenance` |
 | `control` | `control_device`, `control_group`, `control_zone`, `control_broadcast` |
 | `zones` | `list_zones`, `get_zone`, `create_zone`, `update_zone`, `delete_zone`, `delete_all_zones` |
-| `dali` (scan) | `get_scan`, `start_scan`, `cancel_scan` |
-| `link` | `enable_linking`, `disable_linking` |
+| `dali` | `get_scan`, `start_scan`, `cancel_scan`, `get_line_status`, `send_dali16`, `send_dali24` |
 | `info / system` | `get_info`, `update_info`, `reset`, `reboot` |
 | `datetime / location` | `get_datetime`, `set_datetime`, `get_timezones`, `get_location`, `set_location`, `detect_location` |
 | `settings / ethernet` | `get_settings`, `update_settings`, `get_ethernet`, `update_ethernet` |
-| `email` | `get_email_settings`, `update_email_settings`, `test_email_settings` |
-| `sensors` | `list_sensors`, `get_sensor`, `refresh_sensors`, `refresh_sensor` |
+| `sensors` | `list_sensors`, `get_sensor`, `refresh_sensors`, `refresh_sensor`, `delete_sensor`, `delete_all_sensors` |
+| `status queries` | `list_status_queries`, `get_status_queries`, `set_status_queries`, `update_status_queries`, `delete_status_queries` |
 | `sequencer` | `list_sequences`, `get_sequence`, `create_sequence`, `update_sequence`, `delete_sequence`, `start_sequence`, `stop_sequence`, `get_test_sequence`, `update_test_sequence` |
 | `circadian` | `list_circadians`, `get_circadian`, `create_circadian`, `update_circadian`, `delete_circadian`, `start_circadian`, `stop_circadian` |
 | `scheduler` | `list_schedules`, `get_scheduler`, `create_scheduler`, `update_scheduler`, `delete_scheduler`, `start_scheduler`, `stop_scheduler` |
 | `trigger-actions` | `list_trigger_actions`, `get_trigger_action`, `create_trigger_action`, `update_trigger_action`, `delete_trigger_action`, `start_trigger_action`, `stop_trigger_action` |
+| `event-trigger-actions` | `list_event_trigger_actions`, `get_event_trigger_action`, `create_event_trigger_action`, `update_event_trigger_action`, `delete_event_trigger_action`, `start_event_trigger_action`, `stop_event_trigger_action` |
+
+Outside the current spec:
+
+| Group | Methods | Status |
+| --- | --- | --- |
+| `link` | `enable_linking`, `disable_linking` | Dropped from the 1.18.7 spec, but firmware 1.18.7 still serves them |
+| `email` | `get_email_settings`, `update_email_settings`, `test_email_settings` | Firmware 1.18.7 answers 404; kept for older firmware, deprecated |
 
 ## WebSocket API
 

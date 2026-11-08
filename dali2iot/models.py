@@ -22,6 +22,12 @@ OpenAPI splits some entities into multiple schemas (e.g. ``ZoneModel``,
 they are merged into a single class with optional fields; where the
 shapes genuinely differ (mail config), the read and write classes are
 kept separate (e.g. :class:`MailConfig` vs :class:`MailConfigInput`).
+
+**Firmware versions**
+
+The models follow ``openapi.json`` from gateway firmware v1.18.7/1.4.6.
+Fields and models that only older firmware returns (:attr:`Device.scenes`,
+the mail settings) are kept so the library still works against it.
 """
 
 from __future__ import annotations
@@ -45,16 +51,28 @@ __all__ = [
     "CircadianCurve",
     "CircadianStep",
     "ControlData",
+    "Dali16Command",
+    "Dali24Command",
     "DaliBus",
+    "DaliLineStatus",
+    "DaliSensorAddress",
     "DateTime",
     "Device",
+    "DeviceStatus",
     "DeviceTarget",
     "DeviceType",
+    "DiagnosticsMaintenance",
+    "DimmableWithFade",
+    "EnergyReport",
     "Ethernet",
     "EthernetSettings",
+    "EventTriggerAction",
     "Info",
     "InfoUpdate",
     "Kelvin",
+    "KelvinWithFade",
+    "LineScan",
+    "LineScanState",
     "LineStatus",
     "Location",
     "MailConfig",
@@ -63,12 +81,17 @@ __all__ = [
     "MailSettingsInput",
     "Model",
     "NotificationSettings",
+    "RGBWithFade",
     "Scan",
     "ScanState",
+    "SceneWithFade",
     "Scheduler",
     "SchedulerAction",
     "SchedulerRecallModes",
     "SchedulerTime",
+    "Sensor",
+    "SensorAddressType",
+    "SensorType",
     "Sequence",
     "SequenceStep",
     "SequencerAction",
@@ -76,11 +99,16 @@ __all__ = [
     "Signature",
     "SmtpSecurity",
     "StartScan",
+    "StartupMode",
+    "StatusQueryConfig",
     "TestNotificationSettings",
     "TimeZones",
     "TriggerAction",
     "TriggerActionSource",
     "TriggerActionSourceType",
+    "WAFWithFade",
+    "WithFadeTime",
+    "XYWithFade",
     "YnDescriptor",
     "YnDeviceInfo",
     "Zone",
@@ -172,13 +200,16 @@ class Model:
     are handled recursively.
 
     The serializer drops ``None`` and empty collections so partial-update
-    bodies don't accidentally clear server-side fields.
+    bodies don't accidentally clear server-side fields. A field whose
+    metadata sets ``"keep_empty": True`` sends an empty collection anyway,
+    for the few places where ``[]`` or ``{}`` means something.
     """
 
     def to_dict(self) -> dict[str, object]:
         """Render this dataclass as the JSON payload the gateway expects.
 
-        Fields whose value is ``None`` or an empty collection are omitted.
+        Fields whose value is ``None`` or an empty collection are omitted,
+        except empty collections in fields marked ``keep_empty``.
         Returns:
             A new ``dict`` with camelCase keys (or the override from each
             field's metadata) and recursively serialised values.
@@ -188,7 +219,7 @@ class Model:
             value = getattr(self, f.name)
             if value is None:
                 continue
-            if isinstance(value, (list, dict)) and not value:
+            if isinstance(value, (list, dict)) and not value and not f.metadata.get("keep_empty"):
                 continue
             out[_json_name(f)] = _serialize(value)
         return out
@@ -234,6 +265,9 @@ class DeviceType(str, Enum):
     ZONE = "zone"
     """A zone (logical collection of devices)."""
 
+    DALI_GEAR = "daliGear"
+    """DALI control gear. Added in firmware 1.18; the spec doesn't describe it further."""
+
 
 class TriggerActionSourceType(str, Enum):
     """Source kinds that can fire a :class:`TriggerAction`."""
@@ -243,6 +277,9 @@ class TriggerActionSourceType(str, Enum):
 
     GROUP = "group"
     """Trigger from a gateway-managed group (use ``id``)."""
+
+    BROADCAST = "broadcast"
+    """Trigger from broadcast commands."""
 
     D16GEAR = "d16gear"
     """Trigger from raw DALI gear addressed on the bus (use ``address`` + ``line``)."""
@@ -295,9 +332,37 @@ class ScanState(str, Enum):
     IN_PROGRESS = "in progress"
     """A scan is currently running."""
 
+    BUS_ERROR = "bus error"
+    """The scan stopped because of a bus error."""
+
+
+class LineScanState(str, Enum):
+    """Scan state of one DALI line, reported in :attr:`LineScan.scan_state`."""
+
+    IDLE = "idle"
+    """The line isn't being scanned."""
+
+    CANCELLED = "cancelled"
+    """The scan was cancelled."""
+
+    SCANNING = "scanning"
+    """The line is being scanned."""
+
+    ADDRESSING = "addressing"
+    """Devices on the line are being addressed."""
+
+    DONE = "done"
+    """The line's scan finished."""
+
+    SKIPPED = "skipped"
+    """The line was left out of the scan."""
+
+    ERROR = "error"
+    """The line's scan failed."""
+
 
 class LineStatus(str, Enum):
-    """Health of a DALI bus line, reported in :class:`DaliBus`."""
+    """Health of a DALI bus line, reported in :class:`DaliBus` and :class:`DaliLineStatus`."""
 
     OK = "ok"
     """Line is operating normally."""
@@ -307,6 +372,60 @@ class LineStatus(str, Enum):
 
     NO_POWER = "noPower"
     """The line has lost power; no devices are reachable."""
+
+    NOT_REACHABLE = "notReachable"
+    """The gateway can't reach the line."""
+
+
+class StartupMode(str, Enum):
+    """Mode the gateway application started in, reported in :attr:`Info.startup_mode`."""
+
+    NORMAL = "normal"
+    """Normal operation."""
+
+    MINIMAL = "minimal"
+    """Reduced start-up mode."""
+
+
+class SensorType(str, Enum):
+    """What a :class:`Sensor` measures."""
+
+    UNKNOWN = "unknown"
+    """Not identified."""
+
+    TEMPERATURE = "temperature"
+    """Temperature."""
+
+    AIR_HUMIDITY = "airHumidity"
+    """Relative air humidity."""
+
+    AIR_PRESSURE = "airPressure"
+    """Air pressure."""
+
+    E_CO2 = "eCO2"
+    """Equivalent CO₂."""
+
+    VOC = "VOC"
+    """Volatile organic compounds."""
+
+    AIR_QUALITY = "airQuality"
+    """Air quality index."""
+
+    LIGHT = "light"
+    """Illuminance."""
+
+    OCCUPANCY = "occupancy"
+    """Occupancy / presence."""
+
+
+class SensorAddressType(str, Enum):
+    """Where a :class:`Sensor` lives."""
+
+    INTERNAL = "internal"
+    """Built into the gateway."""
+
+    DALI = "dali"
+    """A DALI input device; see :attr:`Sensor.dali_sensor_address`."""
 
 
 class SmtpSecurity(str, Enum):
@@ -357,6 +476,42 @@ class DeviceTarget(Model):
 
 
 @dataclass
+class DeviceStatus(Model):
+    """DALI status flags of a device, as last read by the gateway (``DeviceStatusModel``).
+
+    The flags reflect the gateway's last status query, so they can be stale
+    when periodic status queries are off (see :class:`StatusQueryConfig`).
+    """
+
+    raw: int | None = None
+    """The raw DALI status byte."""
+
+    control_gear_failure: bool | None = None
+    """The control gear reports a failure."""
+
+    lamp_failure: bool | None = None
+    """The lamp (light source) reports a failure."""
+
+    lamp_on: bool | None = None
+    """The lamp is on."""
+
+    limit_error: bool | None = None
+    """The last requested level was outside the min/max limits."""
+
+    fade_running: bool | None = None
+    """A fade is in progress."""
+
+    reset_state: bool | None = None
+    """The device is in its reset state."""
+
+    is_unaddressed: bool | None = None
+    """The device has no short address."""
+
+    power_cycle_seen: bool | None = None
+    """The device has been power-cycled since this flag was last cleared."""
+
+
+@dataclass
 class Device(Model):
     """A DALI device known to the gateway.
 
@@ -382,7 +537,11 @@ class Device(Model):
     """
 
     scenes: list[dict[str, object]] = field(default_factory=list)
-    """Stored DALI scenes — feature/value snapshots indexed by scene number."""
+    """Stored DALI scenes — feature/value snapshots indexed by scene number.
+
+    Only older firmware includes this; firmware 1.18 dropped it from device
+    responses. Use :meth:`Client.get_device_scenes` instead.
+    """
 
     groups: list[int] = field(default_factory=list)
     """DALI group IDs this device belongs to."""
@@ -398,6 +557,12 @@ class Device(Model):
 
     time_signature: Signature | None = None
     """Concurrency token, only populated on single-device fetches."""
+
+    available: bool | None = None
+    """Whether the device answered the gateway recently."""
+
+    status: DeviceStatus | None = None
+    """DALI status flags from the gateway's last status query."""
 
 
 # ---------- color shapes (shared across color* / dimmable* control fields) ----------
@@ -423,6 +588,12 @@ class RGB(Model):
     dimmable: float | None = None
     """Brightness in percent (``0.0``–``100.0``). ``None`` = colour-only."""
 
+    activate: bool | None = None
+    """Colour-only variants: ``False`` = store the colour without activating it.
+
+    The gateway defaults to ``True``. Not used with :attr:`dimmable`.
+    """
+
 
 @dataclass
 class WAF(Model):
@@ -443,6 +614,12 @@ class WAF(Model):
 
     dimmable: float | None = None
     """Brightness in percent. ``None`` = colour-only."""
+
+    activate: bool | None = None
+    """Colour-only variants: ``False`` = store the colour without activating it.
+
+    The gateway defaults to ``True``. Not used with :attr:`dimmable`.
+    """
 
 
 @dataclass
@@ -470,6 +647,87 @@ class Kelvin(Model):
     """Brightness in percent. ``None`` = colour-only."""
 
 
+# ---------- one-off fades (the ``*WithFade`` control fields) ----------
+#
+# The spec presents these as a fade for that one command. Whether the
+# gateway leaves the device's stored fade time unchanged afterwards isn't
+# documented.
+
+
+@dataclass
+class DimmableWithFade(Model):
+    """Brightness with a one-off fade (``dimmableWithFade``)."""
+
+    dim_value: float = 0.0
+    """Brightness in percent (``0.0``–``100.0``)."""
+
+    fade_time: float | None = None
+    """Fade time for this command, in seconds."""
+
+
+@dataclass
+class WithFadeTime(Model):
+    """Just a one-off fade time (``gotoLastActiveWithFade``)."""
+
+    fade_time: float | None = None
+    """Fade time for this command, in seconds."""
+
+
+@dataclass
+class SceneWithFade(Model):
+    """Scene recall with a one-off fade (``sceneWithFade``)."""
+
+    scene: int = 0
+    """Scene number (``0``–``15``)."""
+
+    fade_time: float | None = None
+    """Fade time for this command, in seconds."""
+
+
+@dataclass
+class RGBWithFade(Model):
+    """RGB colour with a one-off fade (``colorRGBWithFade``)."""
+
+    color: RGB = field(default_factory=RGB)
+    """The colour. Leave :attr:`RGB.dimmable` unset."""
+
+    fade_time: float | None = None
+    """Fade time for this command, in seconds."""
+
+
+@dataclass
+class WAFWithFade(Model):
+    """WAF colour with a one-off fade (``colorWAFWithFade``)."""
+
+    color: WAF = field(default_factory=WAF)
+    """The colour. Leave :attr:`WAF.dimmable` unset."""
+
+    fade_time: float | None = None
+    """Fade time for this command, in seconds."""
+
+
+@dataclass
+class KelvinWithFade(Model):
+    """Colour temperature with a one-off fade (``colorKelvinWithFade``)."""
+
+    color: float = 4000.0
+    """Colour temperature in kelvin."""
+
+    fade_time: float | None = None
+    """Fade time for this command, in seconds."""
+
+
+@dataclass
+class XYWithFade(Model):
+    """CIE chromaticity with a one-off fade (``colorXYWithFade``)."""
+
+    color: XY = field(default_factory=XY)
+    """The coordinates. Leave :attr:`XY.dimmable` unset."""
+
+    fade_time: float | None = None
+    """Fade time for this command, in seconds."""
+
+
 @dataclass
 class ControlData(Model):
     """Body of a control request (``POST /device/{id}/control`` and friends).
@@ -493,10 +751,16 @@ class ControlData(Model):
     """Recall a stored scene (``0``–``15``)."""
 
     fade_time: float | None = None
-    """Fade time in seconds for the action."""
+    """Store a new fade time in the device, in seconds.
+
+    This is a device setting, not a fade for this request: the gateway
+    writes it into the DALI gear, and the gear uses it for every later
+    fading command. For a one-off fade use :attr:`dimmable_with_fade` and
+    the other ``*_with_fade`` fields.
+    """
 
     fade_rate: float | None = None
-    """Fade rate in steps per second."""
+    """Store a new fade rate in the device, in steps per second (a device setting, like :attr:`fade_time`)."""
 
     save_to_scene: int | None = None
     """Save the current state into the given scene number."""
@@ -524,6 +788,33 @@ class ControlData(Model):
 
     dimmable_kelvin: Kelvin | None = None
     """Set colour temperature together with a brightness level."""
+
+    dim_up: int | None = None
+    """Send DALI UP this many times (``1``–``5``)."""
+
+    dim_down: int | None = None
+    """Send DALI DOWN this many times (``1``–``5``)."""
+
+    dimmable_with_fade: DimmableWithFade | None = None
+    """Set brightness with a one-off fade time."""
+
+    goto_last_active_with_fade: WithFadeTime | None = None
+    """Recall the last active level with a one-off fade time."""
+
+    scene_with_fade: SceneWithFade | None = None
+    """Recall a scene with a one-off fade time."""
+
+    color_rgb_with_fade: RGBWithFade | None = field(default=None, metadata={"json": "colorRGBWithFade"})
+    """Set RGB colour with a one-off fade time."""
+
+    color_waf_with_fade: WAFWithFade | None = field(default=None, metadata={"json": "colorWAFWithFade"})
+    """Set WAF colour with a one-off fade time."""
+
+    color_kelvin_with_fade: KelvinWithFade | None = None
+    """Set colour temperature with a one-off fade time."""
+
+    color_xy_with_fade: XYWithFade | None = field(default=None, metadata={"json": "colorXYWithFade"})
+    """Set CIE chromaticity with a one-off fade time."""
 
 
 # ---------- zones ----------
@@ -919,6 +1210,32 @@ class StartScan(Model):
 
 
 @dataclass
+class LineScan(Model):
+    """Scan progress for one DALI line, inside :attr:`Scan.lines` (``LineScanResult``)."""
+
+    line: int = 0
+    """DALI line index."""
+
+    scan_state: LineScanState | None = None
+    """The line's scan state."""
+
+    found: int | None = None
+    """Devices found on the line."""
+
+    found_sensors: int | None = None
+    """Sensors found on the line."""
+
+    addressed: int | None = None
+    """Devices addressed on the line."""
+
+    scanned: int | None = None
+    """Addresses scanned so far."""
+
+    progress: float | None = None
+    """Completion for the line."""
+
+
+@dataclass
 class Scan(Model):
     """Result of a DALI bus scan, returned from the scan endpoints."""
 
@@ -936,6 +1253,9 @@ class Scan(Model):
 
     status: ScanState | None = None
     """High-level lifecycle state."""
+
+    lines: list[LineScan] = field(default_factory=list)
+    """Per-line progress."""
 
 
 # ---------- info / system ----------
@@ -959,6 +1279,9 @@ class DaliBus(Model):
 
     line_status: LineStatus | None = None
     """Power / health of the line."""
+
+    device: YnDeviceInfo | None = None
+    """Hardware identity of the interface serving this line."""
 
 
 @dataclass
@@ -995,7 +1318,10 @@ class YnDescriptor(Model):
 
 @dataclass
 class YnDeviceInfo(Model):
-    """Hardware identity of the gateway, reported under :attr:`Info.device`."""
+    """Hardware identity, reported under :attr:`Info.device` and :attr:`DaliBus.device`.
+
+    The 1.18 spec names this schema ``dali_iot__utils__info__DeviceModel``.
+    """
 
     serial: int = 0
     """Manufacturer-assigned serial number."""
@@ -1017,6 +1343,9 @@ class YnDeviceInfo(Model):
 
     production_week: int = 0
     """ISO week of manufacture."""
+
+    device_type: int = 0
+    """Numeric hardware type code."""
 
 
 @dataclass
@@ -1049,6 +1378,12 @@ class Info(Model):
 
     lines: dict[str, DaliBus] = field(default_factory=dict)
     """Per-line bus status, keyed by line ID (``"0"``, ``"1"`` …)."""
+
+    uid: str | None = None
+    """Unique identifier of the gateway."""
+
+    startup_mode: StartupMode | None = None
+    """Mode the application started in."""
 
 
 @dataclass
@@ -1108,6 +1443,13 @@ class Settings(Model):
     dali_ping: bool | None = field(default=None, metadata={"json": "dali_ping"})
     """``True`` = periodically ping the DALI bus to keep gear awake."""
 
+    log_file_enabled: bool | None = field(default=None, metadata={"json": "log_file_enabled"})
+    """``True`` = write troubleshooting logs to files on the gateway.
+
+    Per the spec this slows the application and uses storage, should only be
+    on when support asks for it, and turns itself off after 30 days.
+    """
+
 
 @dataclass
 class EthernetSettings(Model):
@@ -1128,6 +1470,12 @@ class EthernetSettings(Model):
     nameservers: list[str] = field(default_factory=list)
     """Static DNS nameserver IPs."""
 
+    static_fallback_retries: int | None = field(default=None, metadata={"json": "static_fallback_retries"})
+    """DHCP attempts (``0``–``60``, 10 s each) before falling back to ``169.254.0.1/16``.
+
+    ``0`` falls back after a single 10 s timeout.
+    """
+
 
 @dataclass
 class Ethernet(Model):
@@ -1143,7 +1491,244 @@ class Ethernet(Model):
     """Remaining DHCP lease time as a human-readable string."""
 
 
-# ---------- email ----------
+# ---------- device data (energy, diagnostics) ----------
+
+
+@dataclass
+class EnergyReport(Model):
+    """Energy readings of one device (``GET /device/{id}/energyReporting``, ``EnergyData``).
+
+    Only devices implementing DALI part 252 (energy reporting) have this.
+    """
+
+    active_energy_watt_hours: float | None = None
+    """Active energy consumed, in Wh."""
+
+    active_power_watt: float | None = None
+    """Active power, in W."""
+
+    apparent_energy_volt_ampere_hours: float | None = None
+    """Apparent energy, in VAh."""
+
+    apparent_power_volt_ampere: float | None = None
+    """Apparent power, in VA."""
+
+    active_energy_loadside_watt_hours: float | None = None
+    """Active energy on the load side, in Wh."""
+
+    active_power_loadside_watt: float | None = None
+    """Active power on the load side, in W."""
+
+
+@dataclass
+class DiagnosticsMaintenance(Model):
+    """Diagnostics of one device (``GET /device/{id}/diagnosticsMaintenance``, ``DiagnosticsMaintenanceData``).
+
+    Only devices implementing DALI part 253 (diagnostics and maintenance)
+    have this. Field names follow the spec; units are in the names.
+    """
+
+    control_gear_operating_time_seconds: int | None = None
+    control_gear_start_counter: int | None = None
+    control_gear_external_supply_voltage_volt_rms: float | None = None
+    control_gear_external_supply_voltage_frequency_hertz: int | None = None
+    control_gear_power_factor: float | None = None
+    control_gear_overall_failure_condition: bool | None = None
+    control_gear_overall_failure_condition_counter: int | None = None
+    control_gear_external_supply_undervoltage: bool | None = None
+    control_gear_external_supply_undervoltage_counter: int | None = None
+    control_gear_external_supply_overvoltage: bool | None = None
+    control_gear_external_supply_overvoltage_counter: int | None = None
+    control_gear_output_power_limitation: bool | None = None
+    control_gear_output_power_limitation_counter: int | None = None
+    control_gear_thermal_derating: bool | None = None
+    control_gear_thermal_derating_counter: int | None = None
+    control_gear_thermal_shutdown: bool | None = None
+    control_gear_thermal_shutdown_counter: int | None = None
+    control_gear_temperature_celsius: int | None = None
+    control_gear_output_current_percent: int | None = None
+    light_source_start_counter_resettable: int | None = None
+    light_source_start_counter: int | None = None
+    light_source_on_time_resettable_seconds: int | None = None
+    light_source_on_time_seconds: int | None = None
+    light_source_voltage_volt: float | None = None
+    light_source_current_ampere: float | None = None
+    light_source_overall_failure_condition: bool | None = None
+    light_source_overall_failure_condition_counter: int | None = None
+    light_source_short_circuit: bool | None = None
+    light_source_short_circuit_counter: int | None = None
+    light_source_open_circuit: bool | None = None
+    light_source_open_circuit_counter: int | None = None
+    light_source_thermal_derating: bool | None = None
+    light_source_thermal_derating_counter: int | None = None
+    light_source_thermal_shutdown: bool | None = None
+    light_source_thermal_shutdown_counter: int | None = None
+    light_source_temperature_celsius: int | None = None
+    rated_median_useful_life_of_luminaire_hours: int | None = None
+    internal_control_gear_reference_temperature_celsius: int | None = None
+    rated_median_useful_light_source_starts: int | None = None
+
+
+# ---------- raw DALI access ----------
+
+
+@dataclass
+class Dali16Command(Model):
+    """One 16-bit forward frame for control gear (IEC 62386-102), for :meth:`Client.send_dali16`."""
+
+    address: int = 0
+    """Address byte (``0``–``255``)."""
+
+    command: int = 0
+    """Opcode byte (``0``–``255``)."""
+
+
+@dataclass
+class Dali24Command(Model):
+    """One 24-bit forward frame for control devices (IEC 62386-103), for :meth:`Client.send_dali24`.
+
+    24-bit events can be sent too: split the event source and event info
+    across the three bytes.
+    """
+
+    address: int = 0
+    """Address byte (``0``–``255``)."""
+
+    instance: int = 0
+    """Instance byte (``0``–``255``)."""
+
+    command: int = 0
+    """Opcode byte (``0``–``255``)."""
+
+
+@dataclass
+class DaliLineStatus(Model):
+    """Interface status of one DALI line (``GET /dali/readStatus/{line}``, ``LineStatusResponse``)."""
+
+    line: int = 0
+    """DALI line index."""
+
+    bus_voltage_down: bool | None = None
+    """``True`` = no bus voltage."""
+
+    initialize_mode: bool | None = None
+    """``True`` = the line is in initialise mode."""
+
+    quiescent_mode: bool | None = None
+    """``True`` = the line is in quiescent mode."""
+
+    line_status: LineStatus | None = None
+    """Power / health of the line."""
+
+
+# ---------- sensors ----------
+
+
+@dataclass
+class DaliSensorAddress(Model):
+    """Bus address of a DALI sensor, inside :attr:`Sensor.dali_sensor_address`."""
+
+    line: int = 0
+    """DALI line index."""
+
+    address: int = 0
+    """Short address of the input device."""
+
+    instance_number: int = 0
+    """Instance number within the input device."""
+
+
+@dataclass
+class Sensor(Model):
+    """A sensor and its last reading (``GET /sensors``, ``SensorModel``)."""
+
+    id: int = 0
+    """Gateway-assigned identifier."""
+
+    name: str = ""
+    """Human-readable label."""
+
+    unit: str = ""
+    """Unit of :attr:`value` (``"°C"``, ``"lx"`` …)."""
+
+    type: SensorType | None = None
+    """What the sensor measures."""
+
+    value: float | None = None
+    """Last reading."""
+
+    timestamp: str | None = None
+    """When :attr:`value` was read, as an ISO 8601 string."""
+
+    address_type: SensorAddressType | None = None
+    """Internal to the gateway, or on the DALI bus."""
+
+    dali_sensor_address: DaliSensorAddress | None = None
+    """Bus address, for DALI sensors."""
+
+
+# ---------- periodic status queries ----------
+
+
+@dataclass
+class StatusQueryConfig(Model):
+    """Periodic query settings for one DALI line (``/automations/statusQueries/{line}``, ``LineConfigModel``).
+
+    Each query is DALI bus traffic, one device at a time.
+    """
+
+    delay_between_queries: float | None = None
+    """Seconds between consecutive queries."""
+
+    query_status: bool | None = None
+    """``True`` = periodically query each device's status (see :attr:`Device.status`)."""
+
+    query_actual_level: bool | None = None
+    """``True`` = periodically query each device's actual level."""
+
+
+# ---------- event trigger actions ----------
+
+
+@dataclass
+class EventTriggerAction(Model):
+    """Forwards DALI event frames from one line to others (``/automations/eventTriggerAction``).
+
+    Merges ``EventTriggerActionInputModel`` (create), ``…ResponseModel``
+    (read) and ``…UpdateModel`` (partial update). Creating one requires
+    :attr:`target_lines` and :attr:`filters`.
+    """
+
+    id: int | None = None
+    """Server-assigned identifier."""
+
+    name: str | None = None
+    """Human-readable label."""
+
+    enabled: bool | None = None
+    """``False`` = paused. Defaults to ``True`` on create."""
+
+    source_line: int | None = field(default=None, metadata={"json": "source_line"})
+    """Line whose events are forwarded."""
+
+    target_lines: list[int] | None = field(default=None, metadata={"json": "target_lines", "keep_empty": True})
+    """Lines that receive the forwarded events."""
+
+    filters: dict[str, list[int]] | None = field(default=None, metadata={"keep_empty": True})
+    """Only forward events matching every category, e.g. ``{"shortAddress": [1, 2], "instanceType": [1]}``.
+
+    Categories are ``shortAddress``, ``deviceGroup``, ``instanceType`` and
+    ``instanceNumber``. ``{}`` forwards every event frame. The gateway
+    rejects impossible combinations; per the spec the allowed pairs are
+    shortAddress + instanceType, shortAddress + instanceNumber,
+    deviceGroup + instanceType and instanceType + instanceNumber.
+    """
+
+
+# ---------- email (firmware before 1.18 only) ----------
+#
+# Firmware 1.18.7 no longer has ``/email`` (it answers 404), and its spec
+# dropped these schemas. They stay for older firmware.
 
 
 @dataclass

@@ -1,12 +1,17 @@
 """Sync and async HTTP clients for the Lunatone Dali-2 IoT gateway.
 
-Every operation in ``openapi.json`` has a method on both :class:`Client`
-and :class:`AsyncClient`. Bodies and responses are typed via
-:mod:`dali2iot.models`. A handful of endpoints are documented in the spec
-with empty inline schemas (``link``, ``reset``, ``reboot``,
-``test_email_settings``, ``start_*`` / ``stop_*``, sensor refresh) — those
-return ``None``. The ``GET /sensors`` and ``GET /sensors/{id}`` endpoints
-aren't schematised either, so they pass through as ``dict[str, object]``.
+Every operation in ``openapi.json`` (firmware v1.18.7/1.4.6) has a method
+on both :class:`Client` and :class:`AsyncClient`. Bodies and responses are
+typed via :mod:`dali2iot.models`. Endpoints the spec documents with empty
+schemas (``reset``, ``reboot``, deletes, ``start_*`` / ``stop_*``) return
+``None``.
+
+Two groups sit outside the current spec:
+
+- ``enable_linking`` / ``disable_linking``: dropped from the 1.18.7 spec,
+  but the gateway still serves ``/link/enable`` and ``/link/disable``.
+- The email methods: firmware 1.18.7 answers ``/email`` with 404. They are
+  kept for older firmware and emit a :class:`DeprecationWarning`.
 
 All methods raise :class:`dali2iot.errors.ApiError` if the gateway returns
 a non-2xx status code.
@@ -26,6 +31,7 @@ Example
         c.control_device(1, ControlData(dimmable_rgb=RGB(r=1, g=0, b=0, dimmable=80)))
 """
 
+import warnings
 from typing import TypeVar
 
 import httpx
@@ -34,10 +40,16 @@ from .errors import ApiError
 from .models import (
     Circadian,
     ControlData,
+    Dali16Command,
+    Dali24Command,
+    DaliLineStatus,
     DateTime,
     Device,
+    DiagnosticsMaintenance,
+    EnergyReport,
     Ethernet,
     EthernetSettings,
+    EventTriggerAction,
     Info,
     InfoUpdate,
     Location,
@@ -46,9 +58,11 @@ from .models import (
     Model,
     Scan,
     Scheduler,
+    Sensor,
     Sequence,
     Settings,
     StartScan,
+    StatusQueryConfig,
     TimeZones,
     TriggerAction,
     Zone,
@@ -74,16 +88,15 @@ def _device_update_body(name: str | None, groups: list[int] | None) -> dict[str,
     return body
 
 
-def _parse(response: httpx.Response) -> dict[str, object] | None:
-    """Turn an ``httpx.Response`` into a parsed JSON object.
+def _parse_any(response: httpx.Response) -> object:
+    """Turn an ``httpx.Response`` into parsed JSON of any shape.
 
     Args:
         response: The raw response from :mod:`httpx`.
 
     Returns:
-        The parsed JSON object (a ``dict``), or ``None`` when the response
-        has no body (status 204 or empty content) or its body is not a
-        JSON object.
+        The parsed JSON value, or ``None`` when the response has no body
+        (status 204 or empty content).
 
     Raises:
         ApiError: When the response status is ``>= 400``.
@@ -92,8 +105,50 @@ def _parse(response: httpx.Response) -> dict[str, object] | None:
         raise ApiError(response.status_code, response.content)
     if response.status_code == 204 or not response.content:
         return None
-    parsed = response.json()
+    return response.json()
+
+
+def _parse(response: httpx.Response) -> dict[str, object] | None:
+    """Like :func:`_parse_any`, but returns ``None`` unless the body is a JSON object."""
+    parsed = _parse_any(response)
     return parsed if isinstance(parsed, dict) else None
+
+
+def _query(name: str, value: int | None) -> dict[str, int] | None:
+    """Build an optional one-key query string (``None`` = send no query)."""
+    return {name: value} if value is not None else None
+
+
+def _model_array(cls: type[M], data: object) -> list[M]:
+    """Build a list of :class:`Model` instances from a bare JSON array."""
+    items = data if isinstance(data, list) else []
+    return [cls.from_dict(item) for item in items if isinstance(item, dict)]
+
+
+def _model_by_line(cls: type[M], data: dict[str, object] | None) -> dict[int, M]:
+    """Build ``{line: model}`` from a JSON object keyed by line number strings."""
+    return {int(k): cls.from_dict(v) for k, v in (data or {}).items() if k.isdigit() and isinstance(v, dict)}
+
+
+def _scenes(data: dict[str, object] | None) -> dict[int, dict[str, object]]:
+    """Turn a ``ScenesModel`` object into ``{scene number: feature values}``."""
+    return {int(k): dict(v) for k, v in (data or {}).items() if k.isdigit() and isinstance(v, dict)}
+
+
+def _answers(data: object) -> list[int | None]:
+    """Turn a ``DaliResponse`` array into a list of answers (``None`` = no answer)."""
+    items = data if isinstance(data, list) else []
+    return [item if isinstance(item, int) else None for item in items]
+
+
+def _warn_email_removed() -> None:
+    """Warn that the gateway's ``/email`` endpoints are gone on current firmware."""
+    warnings.warn(
+        "The gateway's /email endpoints were removed (firmware v1.18.7 answers 404); "
+        "these methods only work on older firmware.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def _model(cls: type[M], data: dict[str, object] | None) -> M:
@@ -176,9 +231,16 @@ class Client:
         """Close the underlying ``httpx.Client`` connection pool."""
         self._http.close()
 
-    def _json(self, method: str, path: str, body: dict[str, object] | None = None) -> dict[str, object] | None:
-        """Issue a JSON request and return the parsed body (or ``None`` on 204)."""
-        return _parse(self._http.request(method, path, json=body))
+    def _request(self, method: str, path: str, body: object = None, params: dict[str, int] | None = None) -> object:
+        """Issue a JSON request and return the parsed body of any shape (or ``None`` on 204)."""
+        return _parse_any(self._http.request(method, path, json=body, params=params))
+
+    def _json(
+        self, method: str, path: str, body: dict[str, object] | None = None, params: dict[str, int] | None = None
+    ) -> dict[str, object] | None:
+        """Issue a JSON request and return the parsed body if it's an object (or ``None``)."""
+        data = self._request(method, path, body, params)
+        return data if isinstance(data, dict) else None
 
     # ----- devices -----
 
@@ -186,13 +248,16 @@ class Client:
         """Return every DALI :class:`Device` known to the gateway (``GET /devices``)."""
         return _model_list(Device, self._json("GET", "/devices"), "devices")
 
-    def delete_all_devices(self) -> None:
+    def delete_all_devices(self, *, line: int | None = None) -> None:
         """Delete every device (``DELETE /devices``).
 
         Removes the gateway's view of the bus; the physical gear keeps its
         configuration.
+
+        Args:
+            line: Only delete devices on this DALI line; ``None`` = all lines.
         """
-        self._json("DELETE", "/devices")
+        self._json("DELETE", "/devices", params=_query("line", line))
 
     def get_device(self, device_id: int) -> Device:
         """Fetch a single :class:`Device` by id (``GET /device/{id}``)."""
@@ -221,33 +286,103 @@ class Client:
         """Forget a single device (``DELETE /device/{id}``)."""
         self._json("DELETE", f"/device/{device_id}")
 
+    def get_device_scenes(self, device_id: int) -> dict[int, dict[str, object]]:
+        """Return a device's last known scene values (``GET /device/{id}/scenes``).
+
+        The gateway updates these when it sees scene commands on the bus, so
+        they can be out of date; :meth:`refresh_device_scenes` reads them
+        from the device.
+
+        Returns:
+            ``{scene number (0–15): {feature: value}}``. A supported feature
+            whose scene isn't configured is ``None``.
+        """
+        return _scenes(self._json("GET", f"/device/{device_id}/scenes"))
+
+    def refresh_device_scenes(self, device_id: int) -> dict[int, dict[str, object]]:
+        """Query every scene level from the device on the bus (``POST /device/{id}/scenes``).
+
+        Slower than :meth:`get_device_scenes`. Returns the same shape.
+        """
+        return _scenes(self._json("POST", f"/device/{device_id}/scenes"))
+
+    def get_energy_report(self, device_id: int) -> EnergyReport:
+        """Read a device's :class:`EnergyReport` (``GET /device/{id}/energyReporting``)."""
+        return _model(EnergyReport, self._json("GET", f"/device/{device_id}/energyReporting"))
+
+    def get_diagnostics_maintenance(self, device_id: int) -> DiagnosticsMaintenance:
+        """Read a device's :class:`DiagnosticsMaintenance` data (``GET /device/{id}/diagnosticsMaintenance``)."""
+        return _model(DiagnosticsMaintenance, self._json("GET", f"/device/{device_id}/diagnosticsMaintenance"))
+
     # ----- control -----
 
     def control_device(self, device_id: int, data: ControlData) -> None:
         """Apply a :class:`ControlData` payload to one device (``POST /device/{id}/control``)."""
         self._json("POST", f"/device/{device_id}/control", data.to_dict())
 
-    def control_group(self, group_id: int, data: ControlData) -> None:
-        """Apply a :class:`ControlData` payload to a DALI group (``POST /group/{id}/control``)."""
-        self._json("POST", f"/group/{group_id}/control", data.to_dict())
+    def control_group(self, group_id: int, data: ControlData, *, line: int | None = None) -> None:
+        """Apply a :class:`ControlData` payload to a DALI group (``POST /group/{id}/control``).
+
+        Args:
+            group_id: DALI group number.
+            data: What to apply.
+            line: Only send on this DALI line; ``None`` = gateway default.
+        """
+        self._json("POST", f"/group/{group_id}/control", data.to_dict(), params=_query("_line", line))
 
     def control_zone(self, zone_id: int, data: ControlData) -> None:
         """Apply a :class:`ControlData` payload to a :class:`Zone` (``POST /zone/{id}/control``)."""
         self._json("POST", f"/zone/{zone_id}/control", data.to_dict())
 
-    def control_broadcast(self, data: ControlData) -> None:
-        """Broadcast a :class:`ControlData` payload to every device (``POST /broadcast/control``)."""
-        self._json("POST", "/broadcast/control", data.to_dict())
+    def control_broadcast(self, data: ControlData, *, line: int | None = None) -> None:
+        """Broadcast a :class:`ControlData` payload to every device (``POST /broadcast/control``).
+
+        Args:
+            data: What to apply.
+            line: Only broadcast on this DALI line; ``None`` = gateway default.
+        """
+        self._json("POST", "/broadcast/control", data.to_dict(), params=_query("_line", line))
 
     # ----- link -----
 
     def enable_linking(self) -> None:
-        """Enable the gateway's linking (DALI commissioning) mode (``POST /link/enable``)."""
+        """Enable the gateway's linking (DALI commissioning) mode (``POST /link/enable``).
+
+        Not in the firmware 1.18.7 spec, but that firmware still serves it.
+        """
         self._json("POST", "/link/enable")
 
     def disable_linking(self) -> None:
-        """Disable the gateway's linking mode (``POST /link/disable``)."""
+        """Disable the gateway's linking mode (``POST /link/disable``).
+
+        Not in the firmware 1.18.7 spec, but that firmware still serves it.
+        """
         self._json("POST", "/link/disable")
+
+    # ----- raw DALI -----
+
+    def get_line_status(self, line: int) -> DaliLineStatus:
+        """Return the interface status of one DALI line (``GET /dali/readStatus/{line}``)."""
+        return _model(DaliLineStatus, self._json("GET", f"/dali/readStatus/{line}"))
+
+    def send_dali16(self, line: int, commands: list[Dali16Command]) -> list[int | None]:
+        """Send 16-bit frames to control gear and collect the answers (``POST /dali/sendDali16/{line}``).
+
+        The gateway takes at most 16 frames per request. Frames go out
+        straight away, so commands take effect on real gear.
+
+        Returns:
+            One entry per frame, in order: the answer (``0``–``255``) or
+            ``None`` when there was none.
+        """
+        return _answers(self._request("POST", f"/dali/sendDali16/{line}", [c.to_dict() for c in commands]))
+
+    def send_dali24(self, line: int, commands: list[Dali24Command]) -> list[int | None]:
+        """Send 24-bit frames to control devices and collect the answers (``POST /dali/sendDali24/{line}``).
+
+        Same limits and return shape as :meth:`send_dali16`.
+        """
+        return _answers(self._request("POST", f"/dali/sendDali24/{line}", [c.to_dict() for c in commands]))
 
     # ----- DALI bus scan -----
 
@@ -370,14 +505,17 @@ class Client:
         """Delete a single zone (``DELETE /zone/{id}``)."""
         self._json("DELETE", f"/zone/{zone_id}")
 
-    # ----- email -----
+    # ----- email (firmware before 1.18 only) -----
 
     def get_email_settings(self) -> MailSettings:
         """Return the configured :class:`MailSettings` (``GET /email``).
 
         The returned :attr:`MailSettings.mail_config.password` is a
         boolean presence flag, not the secret.
+
+        .. deprecated:: Firmware v1.18.7 answers ``/email`` with 404.
         """
+        _warn_email_removed()
         return _model(MailSettings, self._json("GET", "/email"))
 
     def update_email_settings(self, settings: MailSettingsInput) -> MailSettings:
@@ -386,38 +524,79 @@ class Client:
         Pass plaintext SMTP credentials via :class:`MailSettingsInput`;
         the response (typed as :class:`MailSettings`) replaces the password
         with a presence flag.
+
+        .. deprecated:: Firmware v1.18.7 answers ``/email`` with 404.
         """
+        _warn_email_removed()
         return _model(MailSettings, self._json("PUT", "/email", settings.to_dict()))
 
     def test_email_settings(self) -> None:
-        """Send a test email using the current configuration (``POST /email``)."""
+        """Send a test email using the current configuration (``POST /email``).
+
+        .. deprecated:: Firmware v1.18.7 answers ``/email`` with 404.
+        """
+        _warn_email_removed()
         self._json("POST", "/email")
 
     # ----- sensors -----
 
-    def list_sensors(self) -> dict[str, object] | None:
-        """Return all sensors known to the gateway (``GET /sensors``).
+    def list_sensors(self) -> list[Sensor]:
+        """Return every :class:`Sensor` with its last reading (``GET /sensors``)."""
+        return _model_list(Sensor, self._json("GET", "/sensors"), "sensors")
 
-        The OpenAPI spec doesn't define a schema for the response body, so
-        the raw JSON dict is returned unchanged.
+    def refresh_sensors(self) -> list[Sensor]:
+        """Re-read every sensor on the bus and return the results (``POST /sensors``)."""
+        return _model_list(Sensor, self._json("POST", "/sensors"), "sensors")
+
+    def delete_all_sensors(self, *, line: int | None = None) -> None:
+        """Forget every DALI sensor (``DELETE /sensors``).
+
+        Args:
+            line: Only forget sensors on this DALI line; ``None`` = all lines.
         """
-        return self._json("GET", "/sensors")
+        self._json("DELETE", "/sensors", params=_query("line", line))
 
-    def refresh_sensors(self) -> None:
-        """Trigger a re-poll of every sensor (``POST /sensors``)."""
-        self._json("POST", "/sensors")
+    def get_sensor(self, sensor_id: int) -> Sensor:
+        """Return one :class:`Sensor` with its last reading (``GET /sensors/{id}``)."""
+        return _model(Sensor, self._json("GET", f"/sensors/{sensor_id}"))
 
-    def get_sensor(self, sensor_id: int) -> dict[str, object] | None:
-        """Return the latest reading for one sensor (``GET /sensors/{id}``).
+    def refresh_sensor(self, sensor_id: int) -> Sensor:
+        """Re-read one sensor on the bus and return it (``POST /sensors/{id}``)."""
+        return _model(Sensor, self._json("POST", f"/sensors/{sensor_id}"))
 
-        The OpenAPI spec doesn't define a schema for the response body, so
-        the raw JSON dict is returned unchanged.
+    def delete_sensor(self, sensor_id: int) -> None:
+        """Forget one sensor (``DELETE /sensors/{id}``)."""
+        self._json("DELETE", f"/sensors/{sensor_id}")
+
+    # ----- periodic status queries -----
+
+    def list_status_queries(self) -> dict[int, StatusQueryConfig]:
+        """Return the periodic query settings of every line that has them (``GET /automations/statusQueries``).
+
+        Returns:
+            ``{line: StatusQueryConfig}``.
         """
-        return self._json("GET", f"/sensors/{sensor_id}")
+        return _model_by_line(StatusQueryConfig, self._json("GET", "/automations/statusQueries"))
 
-    def refresh_sensor(self, sensor_id: int) -> None:
-        """Trigger a re-poll of one sensor (``POST /sensors/{id}``)."""
-        self._json("POST", f"/sensors/{sensor_id}")
+    def get_status_queries(self, line: int) -> StatusQueryConfig:
+        """Return one line's periodic query settings (``GET /automations/statusQueries/{line}``)."""
+        return _model(StatusQueryConfig, self._json("GET", f"/automations/statusQueries/{line}"))
+
+    def set_status_queries(self, line: int, config: StatusQueryConfig) -> StatusQueryConfig:
+        """Create or update one line's periodic query settings (``POST /automations/statusQueries/{line}``)."""
+        return _model(StatusQueryConfig, self._json("POST", f"/automations/statusQueries/{line}", config.to_dict()))
+
+    def update_status_queries(self, line: int, config: StatusQueryConfig) -> StatusQueryConfig:
+        """Update one line's existing periodic query settings (``PUT /automations/statusQueries/{line}``)."""
+        return _model(StatusQueryConfig, self._json("PUT", f"/automations/statusQueries/{line}", config.to_dict()))
+
+    def delete_status_queries(self, line: int) -> StatusQueryConfig:
+        """Remove one line's periodic query settings (``DELETE /automations/statusQueries/{line}``).
+
+        Returns:
+            The removed settings.
+        """
+        return _model(StatusQueryConfig, self._json("DELETE", f"/automations/statusQueries/{line}"))
 
     # ----- sequencer -----
 
@@ -556,6 +735,58 @@ class Client:
         """Deactivate a trigger action (``POST /automations/triggerAction/{id}/stop``)."""
         self._json("POST", f"/automations/triggerAction/{trigger_action_id}/stop")
 
+    # ----- event trigger actions -----
+
+    def list_event_trigger_actions(self) -> list[EventTriggerAction]:
+        """Return every :class:`EventTriggerAction` (``GET /automations/eventTriggerActions``)."""
+        return _model_array(EventTriggerAction, self._request("GET", "/automations/eventTriggerActions"))
+
+    def create_event_trigger_action(self, event_trigger_action: EventTriggerAction) -> EventTriggerAction:
+        """Create a new :class:`EventTriggerAction` (``POST /automations/eventTriggerAction``).
+
+        :attr:`EventTriggerAction.target_lines` and
+        :attr:`EventTriggerAction.filters` are required.
+        """
+        return _model(
+            EventTriggerAction,
+            self._json("POST", "/automations/eventTriggerAction", event_trigger_action.to_dict()),
+        )
+
+    def get_event_trigger_action(self, event_trigger_action_id: int) -> EventTriggerAction:
+        """Fetch one :class:`EventTriggerAction` by id (``GET /automations/eventTriggerAction/{id}``)."""
+        return _model(
+            EventTriggerAction,
+            self._json("GET", f"/automations/eventTriggerAction/{event_trigger_action_id}"),
+        )
+
+    def update_event_trigger_action(
+        self, event_trigger_action_id: int, event_trigger_action: EventTriggerAction
+    ) -> EventTriggerAction:
+        """Update a saved :class:`EventTriggerAction` (``PUT /automations/eventTriggerAction/{id}``).
+
+        Fields left as ``None`` are not sent.
+        """
+        return _model(
+            EventTriggerAction,
+            self._json(
+                "PUT",
+                f"/automations/eventTriggerAction/{event_trigger_action_id}",
+                event_trigger_action.to_dict(),
+            ),
+        )
+
+    def delete_event_trigger_action(self, event_trigger_action_id: int) -> None:
+        """Delete one event trigger action (``DELETE /automations/eventTriggerAction/{id}``)."""
+        self._json("DELETE", f"/automations/eventTriggerAction/{event_trigger_action_id}")
+
+    def start_event_trigger_action(self, event_trigger_action_id: int) -> None:
+        """Enable an event trigger action (``POST /automations/eventTriggerAction/{id}/start``)."""
+        self._json("POST", f"/automations/eventTriggerAction/{event_trigger_action_id}/start")
+
+    def stop_event_trigger_action(self, event_trigger_action_id: int) -> None:
+        """Disable an event trigger action (``POST /automations/eventTriggerAction/{id}/stop``)."""
+        self._json("POST", f"/automations/eventTriggerAction/{event_trigger_action_id}/stop")
+
 
 class AsyncClient:
     """Asynchronous client for the Lunatone Dali-2 IoT gateway.
@@ -610,9 +841,18 @@ class AsyncClient:
         """Close the underlying ``httpx.AsyncClient`` connection pool."""
         await self._http.aclose()
 
-    async def _json(self, method: str, path: str, body: dict[str, object] | None = None) -> dict[str, object] | None:
-        """Issue a JSON request and return the parsed body (or ``None`` on 204)."""
-        return _parse(await self._http.request(method, path, json=body))
+    async def _request(
+        self, method: str, path: str, body: object = None, params: dict[str, int] | None = None
+    ) -> object:
+        """Issue a JSON request and return the parsed body of any shape (or ``None`` on 204)."""
+        return _parse_any(await self._http.request(method, path, json=body, params=params))
+
+    async def _json(
+        self, method: str, path: str, body: dict[str, object] | None = None, params: dict[str, int] | None = None
+    ) -> dict[str, object] | None:
+        """Issue a JSON request and return the parsed body if it's an object (or ``None``)."""
+        data = await self._request(method, path, body, params)
+        return data if isinstance(data, dict) else None
 
     # ----- devices -----
 
@@ -623,15 +863,18 @@ class AsyncClient:
         """
         return _model_list(Device, await self._json("GET", "/devices"), "devices")
 
-    async def delete_all_devices(self) -> None:
+    async def delete_all_devices(self, *, line: int | None = None) -> None:
         """Delete every device (``DELETE /devices``).
 
         Removes the gateway's view of the bus; the physical gear keeps its
         configuration.
 
+        Args:
+            line: Only delete devices on this DALI line; ``None`` = all lines.
+
         Async version of :meth:`Client.delete_all_devices`.
         """
-        await self._json("DELETE", "/devices")
+        await self._json("DELETE", "/devices", params=_query("line", line))
 
     async def get_device(self, device_id: int) -> Device:
         """Fetch a single :class:`Device` by id (``GET /device/{id}``).
@@ -669,6 +912,34 @@ class AsyncClient:
         """
         await self._json("DELETE", f"/device/{device_id}")
 
+    async def get_device_scenes(self, device_id: int) -> dict[int, dict[str, object]]:
+        """Return a device's last known scene values (``GET /device/{id}/scenes``).
+
+        Async version of :meth:`Client.get_device_scenes`.
+        """
+        return _scenes(await self._json("GET", f"/device/{device_id}/scenes"))
+
+    async def refresh_device_scenes(self, device_id: int) -> dict[int, dict[str, object]]:
+        """Query every scene level from the device on the bus (``POST /device/{id}/scenes``).
+
+        Async version of :meth:`Client.refresh_device_scenes`.
+        """
+        return _scenes(await self._json("POST", f"/device/{device_id}/scenes"))
+
+    async def get_energy_report(self, device_id: int) -> EnergyReport:
+        """Read a device's :class:`EnergyReport` (``GET /device/{id}/energyReporting``).
+
+        Async version of :meth:`Client.get_energy_report`.
+        """
+        return _model(EnergyReport, await self._json("GET", f"/device/{device_id}/energyReporting"))
+
+    async def get_diagnostics_maintenance(self, device_id: int) -> DiagnosticsMaintenance:
+        """Read a device's :class:`DiagnosticsMaintenance` data (``GET /device/{id}/diagnosticsMaintenance``).
+
+        Async version of :meth:`Client.get_diagnostics_maintenance`.
+        """
+        return _model(DiagnosticsMaintenance, await self._json("GET", f"/device/{device_id}/diagnosticsMaintenance"))
+
     # ----- control -----
 
     async def control_device(self, device_id: int, data: ControlData) -> None:
@@ -678,12 +949,12 @@ class AsyncClient:
         """
         await self._json("POST", f"/device/{device_id}/control", data.to_dict())
 
-    async def control_group(self, group_id: int, data: ControlData) -> None:
+    async def control_group(self, group_id: int, data: ControlData, *, line: int | None = None) -> None:
         """Apply a :class:`ControlData` payload to a DALI group (``POST /group/{id}/control``).
 
         Async version of :meth:`Client.control_group`.
         """
-        await self._json("POST", f"/group/{group_id}/control", data.to_dict())
+        await self._json("POST", f"/group/{group_id}/control", data.to_dict(), params=_query("_line", line))
 
     async def control_zone(self, zone_id: int, data: ControlData) -> None:
         """Apply a :class:`ControlData` payload to a :class:`Zone` (``POST /zone/{id}/control``).
@@ -692,17 +963,19 @@ class AsyncClient:
         """
         await self._json("POST", f"/zone/{zone_id}/control", data.to_dict())
 
-    async def control_broadcast(self, data: ControlData) -> None:
+    async def control_broadcast(self, data: ControlData, *, line: int | None = None) -> None:
         """Broadcast a :class:`ControlData` payload to every device (``POST /broadcast/control``).
 
         Async version of :meth:`Client.control_broadcast`.
         """
-        await self._json("POST", "/broadcast/control", data.to_dict())
+        await self._json("POST", "/broadcast/control", data.to_dict(), params=_query("_line", line))
 
     # ----- link -----
 
     async def enable_linking(self) -> None:
         """Enable the gateway's linking (DALI commissioning) mode (``POST /link/enable``).
+
+        Not in the firmware 1.18.7 spec, but that firmware still serves it.
 
         Async version of :meth:`Client.enable_linking`.
         """
@@ -711,9 +984,34 @@ class AsyncClient:
     async def disable_linking(self) -> None:
         """Disable the gateway's linking mode (``POST /link/disable``).
 
+        Not in the firmware 1.18.7 spec, but that firmware still serves it.
+
         Async version of :meth:`Client.disable_linking`.
         """
         await self._json("POST", "/link/disable")
+
+    # ----- raw DALI -----
+
+    async def get_line_status(self, line: int) -> DaliLineStatus:
+        """Return the interface status of one DALI line (``GET /dali/readStatus/{line}``).
+
+        Async version of :meth:`Client.get_line_status`.
+        """
+        return _model(DaliLineStatus, await self._json("GET", f"/dali/readStatus/{line}"))
+
+    async def send_dali16(self, line: int, commands: list[Dali16Command]) -> list[int | None]:
+        """Send 16-bit frames to control gear and collect the answers (``POST /dali/sendDali16/{line}``).
+
+        Async version of :meth:`Client.send_dali16`.
+        """
+        return _answers(await self._request("POST", f"/dali/sendDali16/{line}", [c.to_dict() for c in commands]))
+
+    async def send_dali24(self, line: int, commands: list[Dali24Command]) -> list[int | None]:
+        """Send 24-bit frames to control devices and collect the answers (``POST /dali/sendDali24/{line}``).
+
+        Async version of :meth:`Client.send_dali24`.
+        """
+        return _answers(await self._request("POST", f"/dali/sendDali24/{line}", [c.to_dict() for c in commands]))
 
     # ----- DALI bus scan -----
 
@@ -901,7 +1199,7 @@ class AsyncClient:
         """
         await self._json("DELETE", f"/zone/{zone_id}")
 
-    # ----- email -----
+    # ----- email (firmware before 1.18 only) -----
 
     async def get_email_settings(self) -> MailSettings:
         """Return the configured :class:`MailSettings` (``GET /email``).
@@ -909,8 +1207,11 @@ class AsyncClient:
         The returned :attr:`MailSettings.mail_config.password` is a
         boolean presence flag, not the secret.
 
+        .. deprecated:: Firmware v1.18.7 answers ``/email`` with 404.
+
         Async version of :meth:`Client.get_email_settings`.
         """
+        _warn_email_removed()
         return _model(MailSettings, await self._json("GET", "/email"))
 
     async def update_email_settings(self, settings: MailSettingsInput) -> MailSettings:
@@ -920,52 +1221,109 @@ class AsyncClient:
         the response (typed as :class:`MailSettings`) replaces the password
         with a presence flag.
 
+        .. deprecated:: Firmware v1.18.7 answers ``/email`` with 404.
+
         Async version of :meth:`Client.update_email_settings`.
         """
+        _warn_email_removed()
         return _model(MailSettings, await self._json("PUT", "/email", settings.to_dict()))
 
     async def test_email_settings(self) -> None:
         """Send a test email using the current configuration (``POST /email``).
 
+        .. deprecated:: Firmware v1.18.7 answers ``/email`` with 404.
+
         Async version of :meth:`Client.test_email_settings`.
         """
+        _warn_email_removed()
         await self._json("POST", "/email")
 
     # ----- sensors -----
 
-    async def list_sensors(self) -> dict[str, object] | None:
-        """Return all sensors known to the gateway (``GET /sensors``).
-
-        The OpenAPI spec doesn't define a schema for the response body, so
-        the raw JSON dict is returned unchanged.
+    async def list_sensors(self) -> list[Sensor]:
+        """Return every :class:`Sensor` with its last reading (``GET /sensors``).
 
         Async version of :meth:`Client.list_sensors`.
         """
-        return await self._json("GET", "/sensors")
+        return _model_list(Sensor, await self._json("GET", "/sensors"), "sensors")
 
-    async def refresh_sensors(self) -> None:
-        """Trigger a re-poll of every sensor (``POST /sensors``).
+    async def refresh_sensors(self) -> list[Sensor]:
+        """Re-read every sensor on the bus and return the results (``POST /sensors``).
 
         Async version of :meth:`Client.refresh_sensors`.
         """
-        await self._json("POST", "/sensors")
+        return _model_list(Sensor, await self._json("POST", "/sensors"), "sensors")
 
-    async def get_sensor(self, sensor_id: int) -> dict[str, object] | None:
-        """Return the latest reading for one sensor (``GET /sensors/{id}``).
+    async def delete_all_sensors(self, *, line: int | None = None) -> None:
+        """Forget every DALI sensor (``DELETE /sensors``).
 
-        The OpenAPI spec doesn't define a schema for the response body, so
-        the raw JSON dict is returned unchanged.
+        Async version of :meth:`Client.delete_all_sensors`.
+        """
+        await self._json("DELETE", "/sensors", params=_query("line", line))
+
+    async def get_sensor(self, sensor_id: int) -> Sensor:
+        """Return one :class:`Sensor` with its last reading (``GET /sensors/{id}``).
 
         Async version of :meth:`Client.get_sensor`.
         """
-        return await self._json("GET", f"/sensors/{sensor_id}")
+        return _model(Sensor, await self._json("GET", f"/sensors/{sensor_id}"))
 
-    async def refresh_sensor(self, sensor_id: int) -> None:
-        """Trigger a re-poll of one sensor (``POST /sensors/{id}``).
+    async def refresh_sensor(self, sensor_id: int) -> Sensor:
+        """Re-read one sensor on the bus and return it (``POST /sensors/{id}``).
 
         Async version of :meth:`Client.refresh_sensor`.
         """
-        await self._json("POST", f"/sensors/{sensor_id}")
+        return _model(Sensor, await self._json("POST", f"/sensors/{sensor_id}"))
+
+    async def delete_sensor(self, sensor_id: int) -> None:
+        """Forget one sensor (``DELETE /sensors/{id}``).
+
+        Async version of :meth:`Client.delete_sensor`.
+        """
+        await self._json("DELETE", f"/sensors/{sensor_id}")
+
+    # ----- periodic status queries -----
+
+    async def list_status_queries(self) -> dict[int, StatusQueryConfig]:
+        """Return the periodic query settings of every line that has them (``GET /automations/statusQueries``).
+
+        Async version of :meth:`Client.list_status_queries`.
+        """
+        return _model_by_line(StatusQueryConfig, await self._json("GET", "/automations/statusQueries"))
+
+    async def get_status_queries(self, line: int) -> StatusQueryConfig:
+        """Return one line's periodic query settings (``GET /automations/statusQueries/{line}``).
+
+        Async version of :meth:`Client.get_status_queries`.
+        """
+        return _model(StatusQueryConfig, await self._json("GET", f"/automations/statusQueries/{line}"))
+
+    async def set_status_queries(self, line: int, config: StatusQueryConfig) -> StatusQueryConfig:
+        """Create or update one line's periodic query settings (``POST /automations/statusQueries/{line}``).
+
+        Async version of :meth:`Client.set_status_queries`.
+        """
+        return _model(
+            StatusQueryConfig,
+            await self._json("POST", f"/automations/statusQueries/{line}", config.to_dict()),
+        )
+
+    async def update_status_queries(self, line: int, config: StatusQueryConfig) -> StatusQueryConfig:
+        """Update one line's existing periodic query settings (``PUT /automations/statusQueries/{line}``).
+
+        Async version of :meth:`Client.update_status_queries`.
+        """
+        return _model(
+            StatusQueryConfig,
+            await self._json("PUT", f"/automations/statusQueries/{line}", config.to_dict()),
+        )
+
+    async def delete_status_queries(self, line: int) -> StatusQueryConfig:
+        """Remove one line's periodic query settings (``DELETE /automations/statusQueries/{line}``).
+
+        Async version of :meth:`Client.delete_status_queries`.
+        """
+        return _model(StatusQueryConfig, await self._json("DELETE", f"/automations/statusQueries/{line}"))
 
     # ----- sequencer -----
 
@@ -1196,3 +1554,69 @@ class AsyncClient:
         Async version of :meth:`Client.stop_trigger_action`.
         """
         await self._json("POST", f"/automations/triggerAction/{trigger_action_id}/stop")
+
+    # ----- event trigger actions -----
+
+    async def list_event_trigger_actions(self) -> list[EventTriggerAction]:
+        """Return every :class:`EventTriggerAction` (``GET /automations/eventTriggerActions``).
+
+        Async version of :meth:`Client.list_event_trigger_actions`.
+        """
+        return _model_array(EventTriggerAction, await self._request("GET", "/automations/eventTriggerActions"))
+
+    async def create_event_trigger_action(self, event_trigger_action: EventTriggerAction) -> EventTriggerAction:
+        """Create a new :class:`EventTriggerAction` (``POST /automations/eventTriggerAction``).
+
+        Async version of :meth:`Client.create_event_trigger_action`.
+        """
+        return _model(
+            EventTriggerAction,
+            await self._json("POST", "/automations/eventTriggerAction", event_trigger_action.to_dict()),
+        )
+
+    async def get_event_trigger_action(self, event_trigger_action_id: int) -> EventTriggerAction:
+        """Fetch one :class:`EventTriggerAction` by id (``GET /automations/eventTriggerAction/{id}``).
+
+        Async version of :meth:`Client.get_event_trigger_action`.
+        """
+        return _model(
+            EventTriggerAction,
+            await self._json("GET", f"/automations/eventTriggerAction/{event_trigger_action_id}"),
+        )
+
+    async def update_event_trigger_action(
+        self, event_trigger_action_id: int, event_trigger_action: EventTriggerAction
+    ) -> EventTriggerAction:
+        """Update a saved :class:`EventTriggerAction` (``PUT /automations/eventTriggerAction/{id}``).
+
+        Async version of :meth:`Client.update_event_trigger_action`.
+        """
+        return _model(
+            EventTriggerAction,
+            await self._json(
+                "PUT",
+                f"/automations/eventTriggerAction/{event_trigger_action_id}",
+                event_trigger_action.to_dict(),
+            ),
+        )
+
+    async def delete_event_trigger_action(self, event_trigger_action_id: int) -> None:
+        """Delete one event trigger action (``DELETE /automations/eventTriggerAction/{id}``).
+
+        Async version of :meth:`Client.delete_event_trigger_action`.
+        """
+        await self._json("DELETE", f"/automations/eventTriggerAction/{event_trigger_action_id}")
+
+    async def start_event_trigger_action(self, event_trigger_action_id: int) -> None:
+        """Enable an event trigger action (``POST /automations/eventTriggerAction/{id}/start``).
+
+        Async version of :meth:`Client.start_event_trigger_action`.
+        """
+        await self._json("POST", f"/automations/eventTriggerAction/{event_trigger_action_id}/start")
+
+    async def stop_event_trigger_action(self, event_trigger_action_id: int) -> None:
+        """Disable an event trigger action (``POST /automations/eventTriggerAction/{id}/stop``).
+
+        Async version of :meth:`Client.stop_event_trigger_action`.
+        """
+        await self._json("POST", f"/automations/eventTriggerAction/{event_trigger_action_id}/stop")

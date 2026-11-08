@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v3.0.0 (2026-11-08)
+
+### Features
+
+- Support the gateway firmware 1.18.7 API
+  ([`4f0593e`](https://github.com/KiraLT/lunatone-dali2-iot/commit/4f0593e18432209453707edadb10f9ebb9d0c04e))
+
+Update openapi.json to the spec served by firmware v1.18.7/1.4.6 and add everything the clients were
+  missing:
+
+- Device scenes, energy reporting and diagnostics endpoints - Line status and raw 16-bit and 24-bit
+  DALI frames - Periodic status query settings per line - Event trigger actions - Sensor delete
+  endpoints and typed Sensor responses - Line query parameters on group and broadcast control and
+  bulk deletes - The one-off *WithFade control fields, dimUp and dimDown, and the colour activate
+  flag - New fields on Device, Info, Scan, Settings and EthernetSettings, and the new enum values
+
+ControlData.fade_time is now documented as the stored device setting it is. The email endpoints
+  answer 404 on 1.18.7, so those methods emit a DeprecationWarning. The link endpoints stay: the
+  gateway still serves them although the spec no longer lists them.
+
+BREAKING CHANGE: list_sensors() and get_sensor() return Sensor models instead of raw dicts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Breaking Changes
+
+- List_sensors() and get_sensor() return Sensor models instead of raw dicts.
+
+
 ## v2.1.0 (2026-05-05)
 
 
